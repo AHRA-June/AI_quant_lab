@@ -26,12 +26,13 @@ discipline. See PRD §0.
 |-----------|-------|-------|
 | **M0** | Repo skeleton, `DataSource` abstraction, pykrx source, raw+factor cache, PIT universe, data-integrity filters | ✅ done |
 | **M1** | Leak-proof primitives, target-weight backtest engine (validated), research-integrity infra (DSR/shuffle/trial-log/holdout), 7 hand-crafted strategies | ✅ done |
-| M2 | LLM → factor DSL (whitelist AST over the primitive registry) | ⬜ next |
-| M3 | ML rank prediction (LightGBM) | ⬜ |
+| **M2** | LLM → factor DSL (whitelist AST over the primitive registry), YAML 2-layer config, rebalance cadence | ✅ done |
+| M3 | ML rank prediction (LightGBM) | ⬜ next |
 
 Engine validation gate (F4.7) is green: golden-value arithmetic + exact
-cap-weighted index reconstruction. Run `quantlab demo` to exercise the whole
-M1 pipeline on synthetic data. 56 tests, network-free.
+cap-weighted index reconstruction. Run `quantlab demo` for the M1 pipeline or
+`quantlab strategy examples/momentum_volume.yaml` for the M2 DSL path — both on
+synthetic data. 82 tests, network-free.
 
 ## Layout
 
@@ -59,9 +60,14 @@ src/quantlab/
     trials.py          automatic trial logging (F7.1)
     holdout.py         holdout vault + audit log (F7.5)
   strategies/          # M1 — 7 hand-crafted factors -> DSL vocabulary
+  dsl/                 # M2 — natural language -> factor DSL
+    parser.py          whitelist AST interpreter (F2.3/F2.4) — look-ahead impossible
+    config.py          YAML 2-layer StrategyConfig (F2.1), content hash (F2.5)
+    runner.py          config -> target weights (rebalance cadence)
+    llm.py             NL -> DSL via Anthropic (lazy), validate-and-retry
   demo.py              full-pipeline demo on synthetic data
   cli.py               `quantlab` CLI (F6)
-tests/                 network-free (FakeDataSource), 56 tests
+tests/                 network-free (Fake data + scripted LLM), 82 tests
 ```
 
 ## Install

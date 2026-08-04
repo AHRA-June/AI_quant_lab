@@ -1,0 +1,11 @@
+# Example strategy config (M2 DSL 2-layer format).
+# Run: quantlab strategy examples/momentum_volume.yaml
+alpha: "rank(returns(close, 20)) * rank(ts_mean(volume, 5) / ts_mean(volume, 20))"
+universe:
+  market: [KOSPI, KOSDAQ]
+  top_mktcap: 300
+  min_turnover: 5e8
+portfolio:
+  n_positions: 20
+  weighting: equal
+  rebalance: weekly

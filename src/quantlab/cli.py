@@ -35,8 +35,11 @@ def demo(
         raise typer.BadParameter(f"choose from {list(STRATEGIES)}")
 
     out = run_demo(strategy, n_positions, settings.experiments_dir / "trials.jsonl", shuffles)
-    s = out["stats"]
-    shuf = out["shuffle"]
+    _print_eval(out)
+
+
+def _print_eval(out: dict) -> None:
+    s, shuf = out["stats"], out["shuffle"]
     typer.echo(f"strategy      : {out['strategy']}  (config {out['config_hash']})")
     typer.echo(f"total return  : {s['total_return']:+.1%}   CAGR {s['cagr']:+.1%}")
     typer.echo(f"Sharpe        : {s['sharpe']:.2f}   Sortino {s['sortino']:.2f}")
@@ -47,6 +50,24 @@ def demo(
     typer.echo(f"shuffle test  : p={shuf.p_value:.3f}  [{verdict}]  vs null "
                f"{shuf.null_mean:+.3f}±{shuf.null_std:.3f}")
     typer.echo(f"trials logged : {out['trials_logged']}  (F7.1, incl. failures)")
+
+
+@app.command()
+def strategy(
+    config_file: str = typer.Argument(..., help="Path to a strategy YAML (alpha/universe/portfolio)."),
+    shuffles: int = typer.Option(50, help="Shuffle-control iterations (F7.4)."),
+) -> None:
+    """Backtest a DSL strategy config on synthetic data (M2 -> M1 pipeline)."""
+    from pathlib import Path
+
+    from quantlab.demo import run_config
+    from quantlab.dsl.config import StrategyConfig
+
+    settings = get_settings()
+    settings.ensure_dirs()
+    cfg = StrategyConfig.from_yaml(Path(config_file).read_text(encoding="utf-8"))
+    out = run_config(cfg, settings.experiments_dir / "trials.jsonl", shuffles)
+    _print_eval(out)
 
 
 @app.command()

@@ -46,8 +46,31 @@ def run_demo(strategy: str, n_positions: int, trials_path: Path, n_shuffles: int
     close, volume = synthetic_market()
     fn, needs_vol = STRATEGIES[strategy]
     alpha = fn(close, volume) if needs_vol else fn(close)
-
     weights = top_n_long_only(alpha, n_positions=n_positions)
+    return _evaluate(alpha, weights, close, trials_path, n_shuffles, label=strategy)
+
+
+def run_config(config, trials_path: Path, n_shuffles: int = 50) -> dict:
+    """Evaluate a :class:`~quantlab.dsl.config.StrategyConfig` end-to-end (M2 → M1).
+
+    Compiles the DSL alpha, builds weights per the portfolio config, and runs the
+    same backtest + integrity pipeline as :func:`run_demo`, on synthetic data.
+    """
+    from quantlab.dsl.runner import strategy_weights
+    from quantlab.dsl.parser import compile_alpha
+
+    close, volume = synthetic_market()
+    context = {
+        "open": close, "high": close, "low": close, "close": close,
+        "volume": volume, "value": close * volume,
+    }
+    alpha = compile_alpha(config.alpha)(context)
+    weights = strategy_weights(config, context)
+    return _evaluate(alpha, weights, close, trials_path, n_shuffles, label=config.content_hash())
+
+
+def _evaluate(alpha, weights, close, trials_path: Path, n_shuffles: int, label: str) -> dict:
+    """Shared pipeline: weights → backtest → metrics → shuffle control → trial log."""
     rets = simple_returns(close)
     res = BacktestEngine().run(weights, rets)
 
@@ -65,7 +88,7 @@ def run_demo(strategy: str, n_positions: int, trials_path: Path, n_shuffles: int
 
     config_hash = content_hash(weights)
     log = TrialLog(trials_path)
-    with log.run(config_hash, meta={"strategy": strategy, "n_positions": n_positions}) as r:
+    with log.run(config_hash, meta={"label": label}) as r:
         r["metrics"] = {
             "sharpe": stats["sharpe"],
             "ic_ir": ic_ir(daily_ic),
@@ -73,7 +96,7 @@ def run_demo(strategy: str, n_positions: int, trials_path: Path, n_shuffles: int
         }
 
     return {
-        "strategy": strategy,
+        "strategy": label,
         "config_hash": config_hash,
         "stats": stats,
         "ic_mean": float(daily_ic.mean()),

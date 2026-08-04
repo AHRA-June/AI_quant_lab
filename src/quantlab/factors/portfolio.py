@@ -10,6 +10,27 @@ from __future__ import annotations
 
 import pandas as pd
 
+_REBALANCE_FREQ = {"daily": None, "weekly": "W", "monthly": "ME"}
+
+
+def apply_rebalance(weights: pd.DataFrame, freq: str) -> pd.DataFrame:
+    """Keep target weights only on rebalance dates; NaN elsewhere.
+
+    The engine forward-fills between rebalances, so blanking non-rebalance rows
+    means "hold" rather than "go to cash". Rebalance dates are the last trading
+    day within each period (weekly/monthly); ``daily`` is a no-op.
+    """
+    if freq not in _REBALANCE_FREQ:
+        raise ValueError(f"unknown rebalance freq: {freq}")
+    rule = _REBALANCE_FREQ[freq]
+    if rule is None:
+        return weights
+    # last available trading day within each calendar period
+    reb_dates = weights.index.to_series().groupby(weights.index.to_period(rule)).max()
+    masked = weights.copy()
+    masked.loc[~weights.index.isin(reb_dates.values)] = float("nan")
+    return masked
+
 
 def top_n_long_only(
     alpha: pd.DataFrame,
