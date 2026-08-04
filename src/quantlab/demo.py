@@ -22,21 +22,50 @@ from quantlab.strategies import STRATEGIES
 
 
 def synthetic_market(
-    n_days: int = 500, n_tickers: int = 30, seed: int = 42
+    n_days: int = 500, n_tickers: int = 30, seed: int = 42, mu_spread: float = 0.0
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Deterministic synthetic close/volume panels."""
+    """Deterministic synthetic close/volume panels.
+
+    ``mu_spread`` > 0 injects a persistent per-ticker drift, so trailing
+    momentum genuinely predicts forward returns — used to show the pipeline
+    detecting a real signal (vs. structureless data, which it discards).
+    """
     idx = pd.bdate_range("2021-01-01", periods=n_days)
     cols = [f"S{i:02d}" for i in range(n_tickers)]
     rng = np.random.default_rng(seed)
-    close = pd.DataFrame(
-        100 * np.cumprod(1 + rng.normal(0.0004, 0.02, size=(n_days, n_tickers)), axis=0),
-        index=idx,
-        columns=cols,
-    )
+    mu = mu_spread * rng.standard_normal(n_tickers)
+    daily = mu[None, :] + rng.normal(0.0004, 0.02, size=(n_days, n_tickers))
+    close = pd.DataFrame(100 * np.cumprod(1 + daily, axis=0), index=idx, columns=cols)
     volume = pd.DataFrame(
         rng.lognormal(12, 0.6, size=(n_days, n_tickers)), index=idx, columns=cols
     )
     return close, volume
+
+
+def run_ml_demo(trials_path: Path, n_shuffles: int = 50) -> dict:
+    """M3 end-to-end on synthetic data WITH an injected cross-sectional signal.
+
+    Walk-forward train -> OOS rank predictions -> evaluate (Rank IC) -> use the
+    predictions as an alpha through the M1 backtest + integrity pipeline. Because
+    the signal is real, it should survive the shuffle control (contrast with
+    ``run_demo`` on structureless data, which is discarded).
+    """
+    from quantlab.factors.portfolio import top_n_long_only
+    from quantlab.ml.evaluate import evaluate_predictions
+    from quantlab.ml.features import build_features
+    from quantlab.ml.labels import forward_return, rank_label
+    from quantlab.ml.pipeline import walk_forward_predict
+
+    close, volume = synthetic_market(n_days=500, n_tickers=40, seed=1, mu_spread=0.004)
+    feats = build_features(close, volume)
+    fwd = forward_return(close, horizon=5)
+    pred = walk_forward_predict(feats, rank_label(fwd), n_folds=3, embargo=5)
+
+    ml = evaluate_predictions(pred, fwd)
+    weights = top_n_long_only(pred, n_positions=10)
+    out = _evaluate(pred, weights, close, trials_path, n_shuffles, label="ml_rank_model")
+    out["ml"] = ml
+    return out
 
 
 def run_demo(strategy: str, n_positions: int, trials_path: Path, n_shuffles: int = 50) -> dict:

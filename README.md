@@ -27,12 +27,13 @@ discipline. See PRD §0.
 | **M0** | Repo skeleton, `DataSource` abstraction, pykrx source, raw+factor cache, PIT universe, data-integrity filters | ✅ done |
 | **M1** | Leak-proof primitives, target-weight backtest engine (validated), research-integrity infra (DSR/shuffle/trial-log/holdout), 7 hand-crafted strategies | ✅ done |
 | **M2** | LLM → factor DSL (whitelist AST over the primitive registry), YAML 2-layer config, rebalance cadence | ✅ done |
-| M3 | ML rank prediction (LightGBM) | ⬜ next |
+| **M3** | ML cross-sectional rank prediction, walk-forward + embargo, Rank IC eval | ✅ done |
 
-Engine validation gate (F4.7) is green: golden-value arithmetic + exact
-cap-weighted index reconstruction. Run `quantlab demo` for the M1 pipeline or
-`quantlab strategy examples/momentum_volume.yaml` for the M2 DSL path — both on
-synthetic data. 82 tests, network-free.
+Two validation gates are green: the engine (golden-value arithmetic + exact
+cap-weighted index reconstruction, F4.7) and the ML pipeline (recovers ~0.25 OOS
+Rank IC from injected signal, ~0 from noise — no leakage). Try:
+`quantlab demo` (M1), `quantlab strategy examples/momentum_volume.yaml` (M2),
+`quantlab ml-demo` (M3). All on synthetic data. **90 tests, network-free.**
 
 ## Layout
 
@@ -65,9 +66,17 @@ src/quantlab/
     config.py          YAML 2-layer StrategyConfig (F2.1), content hash (F2.5)
     runner.py          config -> target weights (rebalance cadence)
     llm.py             NL -> DSL via Anthropic (lazy), validate-and-retry
-  demo.py              full-pipeline demo on synthetic data
+  ml/                  # M3 — cross-sectional rank prediction
+    features.py        leak-proof features (shared primitives) (F3.3)
+    labels.py          forward-return cross-sectional rank target (F3.1)
+    dataset.py         panel -> long-format matrix; predictions -> panel
+    split.py           walk-forward folds with embargo gap (F3.4)
+    model.py           RidgeRankModel (baseline) + LGBMRankModel (lazy) (F3.6)
+    pipeline.py        walk-forward train -> OOS prediction panel
+    evaluate.py        Rank IC / IC IR / quantile spread (F3.5)
+  demo.py              full-pipeline demos on synthetic data
   cli.py               `quantlab` CLI (F6)
-tests/                 network-free (Fake data + scripted LLM), 82 tests
+tests/                 network-free (Fake data + scripted LLM), 90 tests
 ```
 
 ## Install

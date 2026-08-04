@@ -70,6 +70,28 @@ def strategy(
     _print_eval(out)
 
 
+@app.command("ml-demo")
+def ml_demo(
+    shuffles: int = typer.Option(50, help="Shuffle-control iterations (F7.4)."),
+) -> None:
+    """Train an ML rank model walk-forward on synthetic (signal-injected) data (M3).
+
+    Reports out-of-sample Rank IC, then runs the predictions through the M1
+    backtest + integrity pipeline. With a real injected signal it should
+    SURVIVE the shuffle control.
+    """
+    from quantlab.demo import run_ml_demo
+
+    settings = get_settings()
+    settings.ensure_dirs()
+    out = run_ml_demo(settings.experiments_dir / "trials.jsonl", shuffles)
+    ml = out["ml"]
+    typer.echo(f"[walk-forward OOS]  Rank IC {ml['rank_ic_mean']:+.3f}  "
+               f"IC-IR {ml['ic_ir']:+.2f}  q-spread {ml['quantile_spread']:+.4f}  "
+               f"({ml['n_days']}d)")
+    _print_eval(out)
+
+
 @app.command()
 def info() -> None:
     """Show effective settings (paths, cost model)."""
