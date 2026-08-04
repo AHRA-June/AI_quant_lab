@@ -17,6 +17,39 @@ app.add_typer(data_app, name="data")
 
 
 @app.command()
+def demo(
+    strategy: str = typer.Option("momentum_volume_combo", help="Hand-crafted strategy name."),
+    n_positions: int = typer.Option(10, help="Names held long."),
+    shuffles: int = typer.Option(50, help="Shuffle-control iterations (F7.4)."),
+) -> None:
+    """Run the full M1 pipeline on synthetic data (no live KRX needed).
+
+    strategy -> weights -> backtest -> metrics -> shuffle control -> trial log.
+    """
+    from quantlab.demo import run_demo
+    from quantlab.strategies import STRATEGIES
+
+    settings = get_settings()
+    settings.ensure_dirs()
+    if strategy not in STRATEGIES:
+        raise typer.BadParameter(f"choose from {list(STRATEGIES)}")
+
+    out = run_demo(strategy, n_positions, settings.experiments_dir / "trials.jsonl", shuffles)
+    s = out["stats"]
+    shuf = out["shuffle"]
+    typer.echo(f"strategy      : {out['strategy']}  (config {out['config_hash']})")
+    typer.echo(f"total return  : {s['total_return']:+.1%}   CAGR {s['cagr']:+.1%}")
+    typer.echo(f"Sharpe        : {s['sharpe']:.2f}   Sortino {s['sortino']:.2f}")
+    typer.echo(f"max drawdown  : {s['max_drawdown']:.1%}   avg turnover {s['avg_turnover']:.2f}")
+    typer.echo(f"cost drag     : {s['cost_drag']:.2%}")
+    typer.echo(f"IC mean/IR    : {out['ic_mean']:+.3f} / {out['ic_ir']:+.2f}")
+    verdict = "SURVIVES (p<0.05)" if shuf.survives else "DISCARD (p>=0.05)"
+    typer.echo(f"shuffle test  : p={shuf.p_value:.3f}  [{verdict}]  vs null "
+               f"{shuf.null_mean:+.3f}±{shuf.null_std:.3f}")
+    typer.echo(f"trials logged : {out['trials_logged']}  (F7.1, incl. failures)")
+
+
+@app.command()
 def info() -> None:
     """Show effective settings (paths, cost model)."""
     s = get_settings()
