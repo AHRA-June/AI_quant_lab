@@ -28,12 +28,15 @@ discipline. See PRD §0.
 | **M1** | Leak-proof primitives, target-weight backtest engine (validated), research-integrity infra (DSR/shuffle/trial-log/holdout), 7 hand-crafted strategies | ✅ done |
 | **M2** | LLM → factor DSL (whitelist AST over the primitive registry), YAML 2-layer config, rebalance cadence | ✅ done |
 | **M3** | ML cross-sectional rank prediction, walk-forward + embargo, Rank IC eval | ✅ done |
+| **M4** | Self-contained HTML reports (inline SVG), benchmark, PBO, optional LLM commentary | ✅ done |
+| M5+ | Paper trading → live, web dashboard (productization) | ⬜ |
 
 Two validation gates are green: the engine (golden-value arithmetic + exact
 cap-weighted index reconstruction, F4.7) and the ML pipeline (recovers ~0.25 OOS
 Rank IC from injected signal, ~0 from noise — no leakage). Try:
 `quantlab demo` (M1), `quantlab strategy examples/momentum_volume.yaml` (M2),
-`quantlab ml-demo` (M3). All on synthetic data. **90 tests, network-free.**
+`quantlab ml-demo` (M3), `quantlab report examples/momentum_volume.yaml` and
+`quantlab compare` (M4). All on synthetic data. **101 tests, network-free.**
 
 ## Layout
 
@@ -74,9 +77,15 @@ src/quantlab/
     model.py           RidgeRankModel (baseline) + LGBMRankModel (lazy) (F3.6)
     pipeline.py        walk-forward train -> OOS prediction panel
     evaluate.py        Rank IC / IC IR / quantile spread (F3.5)
+  integrity/pbo.py     # M4 — Probability of Backtest Overfitting (CSCV) (F7.3)
+  report/              # M4 — self-contained HTML reports
+    charts.py          dependency-free inline SVG (equity, drawdown) (F5.3)
+    html.py            theme-aware templates (single + comparison)
+    report.py          assembly + benchmark + PBO/DSR comparison (F5.2/F5.4)
+    commentary.py      optional LLM interpretation (pluggable) (F5.5)
   demo.py              full-pipeline demos on synthetic data
   cli.py               `quantlab` CLI (F6)
-tests/                 network-free (Fake data + scripted LLM), 90 tests
+tests/                 network-free (Fake data + scripted LLM), 101 tests
 ```
 
 ## Install

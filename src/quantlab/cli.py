@@ -70,6 +70,44 @@ def strategy(
     _print_eval(out)
 
 
+@app.command()
+def report(
+    config_file: str = typer.Argument(..., help="Strategy YAML to backtest and report."),
+    shuffles: int = typer.Option(50, help="Shuffle-control iterations."),
+) -> None:
+    """Backtest a DSL strategy and write a self-contained HTML report (M4)."""
+    from pathlib import Path
+
+    from quantlab.demo import run_config, synthetic_market, write_strategy_report
+    from quantlab.dsl.config import StrategyConfig
+
+    settings = get_settings()
+    settings.ensure_dirs()
+    cfg = StrategyConfig.from_yaml(Path(config_file).read_text(encoding="utf-8"))
+    out = run_config(cfg, settings.experiments_dir / "trials.jsonl", shuffles)
+    exp_dir = settings.experiments_dir / out["config_hash"]
+    close, _ = synthetic_market()  # same deterministic panel run_config used
+    path = write_strategy_report(out, close, exp_dir)
+    _print_eval(out)
+    typer.echo(f"report        : {path}")
+
+
+@app.command()
+def compare() -> None:
+    """Compare all hand-crafted strategies with PBO + Deflated Sharpe (M4)."""
+    from quantlab.demo import run_comparison
+
+    settings = get_settings()
+    settings.ensure_dirs()
+    out = run_comparison(settings.experiments_dir)
+    pbo = out["pbo"]
+    verdict = "OVERFIT" if pbo.overfit else "OK"
+    typer.echo(f"strategies    : {out['n']}   in-sample best: {out['best']}")
+    typer.echo(f"PBO           : {pbo.pbo:.2f}  [{verdict}]  ({pbo.n_combinations} splits)")
+    typer.echo(f"Deflated Sharpe of best (P[SR>0]): {out['dsr']:.2f}")
+    typer.echo(f"report        : {out['report']}")
+
+
 @app.command("ml-demo")
 def ml_demo(
     shuffles: int = typer.Option(50, help="Shuffle-control iterations (F7.4)."),

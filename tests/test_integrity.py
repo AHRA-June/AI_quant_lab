@@ -10,6 +10,7 @@ from quantlab.integrity.dsr import (
     expected_max_sharpe,
 )
 from quantlab.integrity.holdout import HoldoutAccessError, HoldoutVault
+from quantlab.integrity.pbo import probability_of_backtest_overfitting as pbo
 from quantlab.integrity.shuffle import shuffle_pvalue
 from quantlab.integrity.trials import TrialLog
 
@@ -43,6 +44,31 @@ def test_effective_num_trials_collapses_correlated():
     )
     # 3 raw trials, but a/a_dup collapse -> 2 effective.
     assert effective_num_trials(df, corr_threshold=0.7) == 2
+
+
+# --- PBO / CSCV (F7.3) -----------------------------------------------------
+
+
+def test_pbo_high_for_noise_low_for_real_edge():
+    rng = np.random.default_rng(0)
+    T, N = 400, 20
+    # All-noise strategies: the IS-best is random OOS -> PBO near/above 0.5.
+    noise = pd.DataFrame(rng.normal(0, 0.01, (T, N)))
+    assert pbo(noise, n_blocks=8).pbo > 0.4
+
+    # One strategy with a genuine, consistent edge -> selection is reliable.
+    mat = rng.normal(0, 0.01, (T, N))
+    mat[:, 0] += 0.004
+    res = pbo(pd.DataFrame(mat), n_blocks=8)
+    assert res.pbo < 0.1 and not res.overfit
+
+
+def test_pbo_requires_even_blocks_and_multiple_strategies():
+    df = pd.DataFrame(np.random.default_rng(0).normal(0, 1, (100, 5)))
+    with pytest.raises(ValueError):
+        pbo(df, n_blocks=7)
+    with pytest.raises(ValueError):
+        pbo(df.iloc[:, :1], n_blocks=8)
 
 
 # --- shuffle control (F7.4) -----------------------------------------------
