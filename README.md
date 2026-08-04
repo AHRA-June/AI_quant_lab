@@ -29,14 +29,17 @@ discipline. See PRD §0.
 | **M2** | LLM → factor DSL (whitelist AST over the primitive registry), YAML 2-layer config, rebalance cadence | ✅ done |
 | **M3** | ML cross-sectional rank prediction, walk-forward + embargo, Rank IC eval | ✅ done |
 | **M4** | Self-contained HTML reports (inline SVG), benchmark, PBO, optional LLM commentary | ✅ done |
+| **Real data** | End-to-end pipeline on real KRX: `DataSource` → PIT universe → adjusted panels → backtest → report | ✅ wired |
 | M5+ | Paper trading → live, web dashboard (productization) | ⬜ |
 
 Two validation gates are green: the engine (golden-value arithmetic + exact
 cap-weighted index reconstruction, F4.7) and the ML pipeline (recovers ~0.25 OOS
 Rank IC from injected signal, ~0 from noise — no leakage). Try:
 `quantlab demo` (M1), `quantlab strategy examples/momentum_volume.yaml` (M2),
-`quantlab ml-demo` (M3), `quantlab report examples/momentum_volume.yaml` and
-`quantlab compare` (M4). All on synthetic data. **101 tests, network-free.**
+`quantlab ml-demo` (M3), `quantlab report ...` / `quantlab compare` (M4).
+Real KRX: `quantlab backtest examples/momentum_volume.yaml --from 2022-01-01
+--to 2023-12-31` (needs `[data]` extra + KRX network access). The full
+pipeline is validated end-to-end via a fake source. **104 tests, network-free.**
 
 ## Layout
 
@@ -51,6 +54,7 @@ src/quantlab/
     filters.py         preferred/spac/reit/etf exclusion (DQ.3)
     cache.py           parquet cache + read-through PriceStore (F1.2/F1.4)
     universe.py        point-in-time universe reconstruction (§11)
+    panels.py          assemble adjusted OHLCV into dates x tickers panels
   factors/             # M1 core — the shared leak-proof primitives
     primitives.py      point-in-time ts/cross-sectional operators
     portfolio.py       alpha -> long-only target weights
@@ -83,9 +87,10 @@ src/quantlab/
     html.py            theme-aware templates (single + comparison)
     report.py          assembly + benchmark + PBO/DSR comparison (F5.2/F5.4)
     commentary.py      optional LLM interpretation (pluggable) (F5.5)
+  run.py               real-data backtest orchestrator (DataSource -> report)
   demo.py              full-pipeline demos on synthetic data
   cli.py               `quantlab` CLI (F6)
-tests/                 network-free (Fake data + scripted LLM), 101 tests
+tests/                 network-free (Fake data + scripted LLM), 104 tests
 ```
 
 ## Install

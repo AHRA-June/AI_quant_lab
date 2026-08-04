@@ -83,3 +83,69 @@ class FakeDataSource(DataSource):
             split_at = len(close) // 2
             close.iloc[:split_at] = close.iloc[:split_at] / 2.0
         return close.loc[str(start) : str(end)]
+
+
+class RichFakeDataSource(DataSource):
+    """Larger synthetic KRX slice (30 commons + specials, ~500 trading days) for
+    end-to-end pipeline tests. A persistent per-ticker drift gives momentum a
+    genuine signal. No corporate actions -> adjusted close == raw close."""
+
+    N_COMMON = 30
+
+    def __init__(self, seed: int = 7) -> None:
+        import numpy as np
+
+        self._dates = pd.bdate_range("2021-01-01", "2022-12-31")
+        self.commons = [f"{100000 + i * 10:06d}" for i in range(self.N_COMMON)]  # end in 0
+        self.preferred = ["100005"]        # non-'0' suffix -> filtered
+        self.etf = ["069500"]
+        rng = np.random.default_rng(seed)
+        self._mu = {t: 0.0006 * rng.standard_normal() for t in self.commons}
+        self._mu.update({t: 0.0 for t in self.preferred + self.etf})
+        self._cap = {t: float(50_000_000 - i * 500_000) for i, t in enumerate(self.commons)}
+        self._cap.update({"100005": 3_000_000.0, "069500": 40_000_000.0})
+
+    def _all(self) -> list[str]:
+        return self.commons + self.preferred + self.etf
+
+    def get_ticker_list(self, on: date, market: Market) -> list[str]:
+        return self._all() if market == Market.KOSPI else []
+
+    def get_etf_etn_ticker_list(self, on: date) -> list[str]:
+        return list(self.etf)
+
+    def get_ticker_name(self, ticker: str, on: date | None = None) -> str:
+        if ticker in self.preferred:
+            return "테스트우"
+        if ticker in self.etf:
+            return "KODEX test"
+        return f"Corp{ticker}"
+
+    def get_market_cap(self, on: date, market: Market) -> pd.DataFrame:
+        if market != Market.KOSPI:
+            return pd.DataFrame({"mktcap": {}})
+        df = pd.DataFrame({"mktcap": self._cap})
+        df.index.name = "ticker"
+        return df
+
+    def _raw_frame(self, ticker: str) -> pd.DataFrame:
+        import numpy as np
+
+        n = len(self._dates)
+        rng = np.random.default_rng(abs(hash(ticker)) % (2**32))
+        mu = self._mu.get(ticker, 0.0)
+        daily = mu + 0.015 * rng.standard_normal(n)
+        close = pd.Series(50_000 * np.cumprod(1 + daily), index=self._dates)
+        volume = pd.Series(rng.uniform(3e4, 8e4, n), index=self._dates)
+        df = pd.DataFrame(
+            {"open": close, "high": close * 1.01, "low": close * 0.99,
+             "close": close, "volume": volume, "value": close * volume}
+        )
+        df.index.name = "date"
+        return df
+
+    def get_ohlcv(self, ticker: str, start: date, end: date) -> pd.DataFrame:
+        return self._raw_frame(ticker).loc[str(start) : str(end)]
+
+    def get_adjusted_close(self, ticker: str, start: date, end: date) -> pd.Series:
+        return self._raw_frame(ticker)["close"].loc[str(start) : str(end)]

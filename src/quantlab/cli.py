@@ -71,6 +71,39 @@ def strategy(
 
 
 @app.command()
+def backtest(
+    config_file: str = typer.Argument(..., help="Strategy YAML to backtest on real KRX data."),
+    date_from: str = typer.Option(..., "--from", help="Backtest start (YYYY-MM-DD / YYYYMMDD)."),
+    date_to: str = typer.Option(..., "--to", help="Backtest end (YYYY-MM-DD / YYYYMMDD)."),
+    shuffles: int = typer.Option(50, help="Shuffle-control iterations (F7.4)."),
+) -> None:
+    """Run a strategy on real KRX data end-to-end (needs the [data] extra + KRX access).
+
+    Reconstructs the point-in-time universe, assembles adjusted panels, backtests,
+    and writes an HTML report — the same pipeline the demos use, fed by pykrx.
+    """
+    from pathlib import Path
+
+    from quantlab.dsl.config import StrategyConfig
+    from quantlab.data.pykrx_source import PykrxDataSource
+    from quantlab.run import run_backtest
+    from quantlab.types import as_date
+
+    settings = get_settings()
+    settings.ensure_dirs()
+    cfg = StrategyConfig.from_yaml(Path(config_file).read_text(encoding="utf-8"))
+    out_dir = settings.experiments_dir / cfg.content_hash()
+    out = run_backtest(
+        PykrxDataSource(), cfg,
+        start=as_date(date_from), end=as_date(date_to),
+        cache_dir=settings.cache_dir, out_dir=out_dir, n_shuffles=shuffles,
+    )
+    typer.echo(f"universe      : {out['universe_size']} names")
+    _print_eval(out)
+    typer.echo(f"report        : {out['report']}")
+
+
+@app.command()
 def report(
     config_file: str = typer.Argument(..., help="Strategy YAML to backtest and report."),
     shuffles: int = typer.Option(50, help="Shuffle-control iterations."),
