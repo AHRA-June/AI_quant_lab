@@ -39,7 +39,7 @@ Rank IC from injected signal, ~0 from noise — no leakage). Try:
 `quantlab ml-demo` (M3), `quantlab report ...` / `quantlab compare` (M4).
 Real KRX: `quantlab backtest examples/momentum_volume.yaml --from 2022-01-01
 --to 2023-12-31` (needs `[data]` extra + KRX network access). The full
-pipeline is validated end-to-end via a fake source. **104 tests, network-free.**
+pipeline is validated end-to-end via a fake source. **114 tests, network-free.**
 
 ## Layout
 
@@ -50,6 +50,7 @@ src/quantlab/
   data/                # M0
     source.py          DataSource ABC (F1.3) — vendor-agnostic
     pykrx_source.py    live KRX impl (F1.1)
+    csv_source.py      file-backed impl — real data without live KRX access
     adjust.py          raw + factor adjustment (DQ.1)
     filters.py         preferred/spac/reit/etf exclusion (DQ.3)
     cache.py           parquet cache + read-through PriceStore (F1.2/F1.4)
@@ -90,7 +91,7 @@ src/quantlab/
   run.py               real-data backtest orchestrator (DataSource -> report)
   demo.py              full-pipeline demos on synthetic data
   cli.py               `quantlab` CLI (F6)
-tests/                 network-free (Fake data + scripted LLM), 104 tests
+tests/                 network-free (Fake data + scripted LLM), 114 tests
 ```
 
 ## Install
@@ -114,6 +115,22 @@ uv pip install -e ".[data]"         # + pykrx / FinanceDataReader (live KRX)
 shuffle control → trial log). On synthetic random data every strategy is
 correctly **discarded** by the shuffle test (p ≥ 0.05) — the integrity layer
 refusing to bless noise is the point.
+
+### Real data without live KRX access
+
+`quantlab backtest` uses the live pykrx source (needs KRX network access). When
+that's blocked, `CsvDataSource` feeds any *downloaded* long-format OHLCV CSV
+through the **same** universe → panels → backtest → integrity → report path:
+
+```bash
+python examples/run_sp500.py   # fetches a public S&P 500 daily CSV, real backtest + HTML report
+```
+
+The example ranks a point-in-time universe by a trailing dollar-volume proxy
+(shares-outstanding isn't in a price-only CSV — see `CsvDataSource` caveats),
+runs a momentum×volume alpha, and writes a self-contained report. On S&P 500
+2014–2018 the shuffle test again returns **p ≫ 0.05** — the pipeline works on
+real prices *and* still declines to bless a weak signal.
 
 ## Test
 

@@ -188,7 +188,7 @@ def _evaluate(alpha, weights, close, trials_path: Path, n_shuffles: int, label: 
     }
 
 
-def write_strategy_report(out: dict, close: pd.DataFrame, out_dir, commentary=None):
+def write_strategy_report(out: dict, close: pd.DataFrame, out_dir, commentary=None, subtitle=None):
     """Turn an evaluation dict into a self-contained HTML report (M4)."""
     from quantlab.backtest.engine import simple_returns
     from quantlab.report.report import ReportInputs, equal_weight_benchmark, write_report
@@ -196,7 +196,7 @@ def write_strategy_report(out: dict, close: pd.DataFrame, out_dir, commentary=No
     bench = equal_weight_benchmark(simple_returns(close))
     inp = ReportInputs(
         label=out["strategy"],
-        subtitle=f"config {out['config_hash']} · synthetic data",
+        subtitle=subtitle or f"config {out['config_hash']} · synthetic data",
         stats=out["stats"],
         equity=out["equity"],
         benchmark_equity=bench,

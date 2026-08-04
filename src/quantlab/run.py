@@ -42,6 +42,7 @@ def run_backtest(
     out_dir: str | Path,
     warmup_days: int = 400,
     n_shuffles: int = 50,
+    data_label: str = "real data",
 ) -> dict:
     """Run ``config`` on ``source`` over ``[start, end]`` and write a report."""
     from quantlab.demo import _evaluate, write_strategy_report  # local: avoids cycle
@@ -74,5 +75,9 @@ def run_backtest(
         alpha, weights, close_w, trials_path, n_shuffles, label=config.content_hash()
     )
     out["universe_size"] = len(tickers)
-    out["report"] = write_strategy_report(out, close_w, out_dir)
+    subtitle = (
+        f"config {out['config_hash']} · {data_label} · "
+        f"{start:%Y-%m-%d}→{end:%Y-%m-%d} · {len(tickers)} names"
+    )
+    out["report"] = write_strategy_report(out, close_w, out_dir, subtitle=subtitle)
     return out

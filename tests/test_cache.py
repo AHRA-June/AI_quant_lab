@@ -52,3 +52,33 @@ def test_cache_hit_does_not_refetch(tmp_path, monkeypatch):
     monkeypatch.setattr(src, "get_ohlcv", counting)
     store.get_raw("000660", START, END)  # should hit cache
     assert calls["n"] == 0
+
+
+def test_widening_the_window_refetches_and_serves_full_range(tmp_path):
+    """A first narrow read must not pin the cache: a later wider read has to
+    grow it, or downstream panels get silently truncated (the run_backtest
+    universe→panel ordering trap)."""
+    src = FakeDataSource()
+    store = PriceStore(src, OHLCVCache(tmp_path))
+
+    narrow_end = date(2024, 1, 31)
+    store.get_raw("000660", START, narrow_end)  # warm with a short window
+    assert store.get_raw("000660", START, narrow_end).index.max().date() <= narrow_end
+
+    wide = store.get_raw("000660", START, END)  # ask for the full range
+    assert wide.index.max().date() > narrow_end  # cache grew, not truncated
+    assert wide.index.max().date() >= date(2024, 3, 28)
+
+
+def test_narrower_read_after_wide_still_cache_hits(tmp_path, monkeypatch):
+    src = FakeDataSource()
+    store = PriceStore(src, OHLCVCache(tmp_path))
+    store.get_raw("000660", START, END)  # warm wide
+
+    calls = {"n": 0}
+    orig = src.get_ohlcv
+    monkeypatch.setattr(
+        src, "get_ohlcv", lambda *a, **k: (calls.__setitem__("n", calls["n"] + 1), orig(*a, **k))[1]
+    )
+    store.get_raw("000660", date(2024, 2, 1), date(2024, 2, 15))  # inside coverage
+    assert calls["n"] == 0

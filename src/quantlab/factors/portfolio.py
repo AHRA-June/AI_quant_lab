@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import pandas as pd
 
-_REBALANCE_FREQ = {"daily": None, "weekly": "W", "monthly": "ME"}
+# Period aliases for ``DatetimeIndex.to_period`` (note: "M", not the resample
+# alias "ME" — to_period rejects the latter).
+_REBALANCE_FREQ = {"daily": None, "weekly": "W", "monthly": "M"}
 
 
 def apply_rebalance(weights: pd.DataFrame, freq: str) -> pd.DataFrame:
