@@ -188,8 +188,14 @@ def _evaluate(alpha, weights, close, trials_path: Path, n_shuffles: int, label: 
     }
 
 
-def write_strategy_report(out: dict, close: pd.DataFrame, out_dir, commentary=None, subtitle=None):
-    """Turn an evaluation dict into a self-contained HTML report (M4)."""
+def write_strategy_report(out: dict, close: pd.DataFrame, out_dir, commentary=None,
+                          subtitle=None, client=None):
+    """Turn an evaluation dict into a self-contained HTML report (M4).
+
+    If ``client`` (an :class:`~quantlab.dsl.llm.LLMClient`) is given and no
+    ``commentary`` was passed, an LLM interpretation is generated and embedded.
+    Any commentary failure is swallowed — the report is never blocked on the LLM.
+    """
     from quantlab.backtest.engine import simple_returns
     from quantlab.report.report import ReportInputs, equal_weight_benchmark, write_report
 
@@ -205,4 +211,10 @@ def write_strategy_report(out: dict, close: pd.DataFrame, out_dir, commentary=No
         ml=out.get("ml"),
         commentary=commentary,
     )
+    if commentary is None and client is not None:
+        from quantlab.report.commentary import generate_commentary
+        try:
+            inp.commentary = generate_commentary(client, inp)
+        except Exception:  # noqa: BLE001 — commentary is best-effort, never fatal
+            inp.commentary = None
     return write_report(inp, out_dir)

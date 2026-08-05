@@ -30,6 +30,25 @@ def available_strategies() -> list[str]:
     return list(STRATEGIES)
 
 
+def get_llm_client():
+    """Return a real LLM client if one is configured, else None.
+
+    Requires the `llm` extra (``anthropic``) *and* an ``ANTHROPIC_API_KEY``. Absent
+    either, the dashboard runs fine — natural-language input and commentary are
+    simply disabled, not broken.
+    """
+    import os
+
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return None
+    try:
+        import anthropic  # noqa: F401
+    except ImportError:
+        return None
+    from quantlab.dsl.llm import AnthropicClient
+    return AnthropicClient()
+
+
 def run_synthetic_backtest(
     store: RunStore,
     *,
@@ -37,6 +56,7 @@ def run_synthetic_backtest(
     n_positions: int = 20,
     n_shuffles: int = 50,
     trials_path: str | Path | None = None,
+    client=None,
 ) -> RunRecord:
     """Run one hand-crafted strategy on synthetic data, persist + return its record."""
     if strategy not in STRATEGIES:
@@ -56,11 +76,61 @@ def run_synthetic_backtest(
     write_strategy_report(
         out, close, run_dir,
         subtitle=f"{strategy} · 합성 데이터 · 종목 {n_positions}개",
+        client=client,
     )
 
     record = _record_from_out(
         out, id=run_id, created_at=created, strategy=strategy, source="synthetic",
         n_positions=n_positions,
+    )
+    store.append(record)
+    return record
+
+
+def run_nl_backtest(
+    store: RunStore,
+    *,
+    idea: str,
+    client,
+    n_shuffles: int = 50,
+    trials_path: str | Path | None = None,
+) -> RunRecord:
+    """Natural-language idea → LLM-generated DSL config → synthetic backtest.
+
+    The LLM only proposes the config; the whitelist parser validates it, so an
+    unsafe/invalid expression is rejected, not trusted. The report embeds an LLM
+    interpretation of the result.
+    """
+    from quantlab.dsl.llm import StrategyGenerator
+    from quantlab.dsl.parser import compile_alpha
+    from quantlab.dsl.runner import strategy_weights
+
+    if client is None:
+        raise ValueError("LLM is not configured (set ANTHROPIC_API_KEY and install '.[llm]')")
+    if not idea.strip():
+        raise ValueError("아이디어를 입력하세요")
+
+    config = StrategyGenerator(client).generate(idea)   # validated StrategyConfig
+    trials_path = Path(trials_path) if trials_path else store.base / "trials.jsonl"
+
+    close, volume = synthetic_market()
+    context = {"open": close, "high": close, "low": close, "close": close,
+               "volume": volume, "value": close * volume}
+    alpha = compile_alpha(config.alpha)(context)
+    weights = strategy_weights(config, context)
+    out = _evaluate(alpha, weights, close, trials_path, n_shuffles, label=config.content_hash())
+
+    created = _now_iso()
+    run_id = RunRecord.new_id(created, "nl-" + config.content_hash()[:8])
+    run_dir = store.run_dir(run_id)
+    label = idea.strip().replace("\n", " ")[:48]
+    write_strategy_report(
+        out, close, run_dir, subtitle=f"자연어: {label} · 합성 데이터", client=client,
+    )
+    record = _record_from_out(
+        out, id=run_id, created_at=created, strategy=label, source="nl",
+        n_positions=int(getattr(config.portfolio, "n_positions", 0)),
+        note=config.alpha,
     )
     store.append(record)
     return record
@@ -76,6 +146,7 @@ def run_csv_backtest(
     n_shuffles: int = 50,
     ticker_col: str = "Name",
     data_label: str = "CSV real data",
+    client=None,
 ) -> RunRecord:
     """Backtest a DSL strategy on a downloaded OHLCV CSV via :class:`CsvDataSource`.
 
@@ -101,6 +172,7 @@ def run_csv_backtest(
         cache_dir=store.base / "cache" / run_id, out_dir=run_dir,
         n_shuffles=n_shuffles, data_label=data_label,
         trials_path=store.base / "trials.jsonl",   # one shared log → complete trial count
+        client=client,
     )
     record = _record_from_out(
         out, id=run_id, created_at=created, strategy=f"csv:{label[:8]}", source="csv",
@@ -176,7 +248,8 @@ def read_holdout_audit(store: RunStore) -> list[dict]:
 
 
 def _record_from_out(out: dict, *, id: str, created_at: str, strategy: str, source: str,
-                     n_positions: int, universe_size: int = 0, window: str = "") -> RunRecord:
+                     n_positions: int, universe_size: int = 0, window: str = "",
+                     note: str = "") -> RunRecord:
     """Map an evaluation/backtest ``out`` dict onto a persisted RunRecord."""
     s = out["stats"]
     shuf = out["shuffle"]
@@ -187,5 +260,5 @@ def _record_from_out(out: dict, *, id: str, created_at: str, strategy: str, sour
         max_drawdown=float(s["max_drawdown"]), total_return=float(s["total_return"]),
         shuffle_p=float(shuf.p_value), survives=bool(shuf.survives),
         trials_logged=int(out["trials_logged"]), report_file="report.html",
-        universe_size=universe_size, window=window,
+        universe_size=universe_size, window=window, note=note,
     )

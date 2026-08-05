@@ -12,23 +12,32 @@ from __future__ import annotations
 from quantlab.dsl.llm import LLMClient
 from quantlab.report.report import ReportInputs
 
-_SYSTEM = """You are a skeptical quant research assistant. Given a backtest's
-metrics and research-integrity verdicts, write 2-4 plain sentences interpreting
-the result for the researcher. Be honest: if the shuffle control says DISCARD or
-PBO indicates overfitting, say the result is not trustworthy regardless of a high
-Sharpe. Do not promote or give investment advice. No preamble."""
+_SYSTEM = """당신은 회의적인 퀀트 리서치 어시스턴트입니다. 백테스트의 지표와
+연구-무결성 판정을 받아, 연구자를 위해 결과를 **한국어로** 해석해 주세요.
+
+다음 세 문단으로, 각 2~3문장씩 쓰세요 (문단 제목 없이 자연스러운 문장으로):
+1) 성과 요약 — 수익률·위험(낙폭/변동성)·비용을 실제 운용 관점에서 무엇을 의미하는지.
+2) 신뢰도 — 셔플 대조군과 PBO/DSR이 무엇을 말하는지, 그래서 이 결과를 믿어도 되는지.
+   셔플이 DISCARD거나 PBO가 OVERFIT이면, 샤프가 높아도 "우연일 가능성이 크다"고
+   분명히 말하세요. 왜 그런 판정이 나왔는지(요행/과최적화 위험)를 쉽게 설명하세요.
+3) 주의점 — 이 백테스트가 놓칠 수 있는 것(합성/제한 데이터, 미래참조 아님이지만
+   표본 밖 성능은 별개 등)과 다음에 확인할 것 한두 가지.
+
+절대 홍보하거나 투자 자문을 하지 마세요. 서두("다음은…") 없이 본문만 쓰세요."""
 
 
 def _facts(inp: ReportInputs) -> str:
     s = inp.stats
     lines = [
         f"strategy: {inp.label}",
-        f"CAGR {s['cagr']:.1%}, Sharpe {s['sharpe']:.2f}, "
-        f"max drawdown {s['max_drawdown']:.1%}, cost drag {s.get('cost_drag', 0):.2%}",
+        f"CAGR {s['cagr']:.1%}, Sharpe {s['sharpe']:.2f}, Sortino {s.get('sortino', float('nan')):.2f}, "
+        f"annual vol {s.get('ann_vol', float('nan')):.1%}, max drawdown {s['max_drawdown']:.1%}, "
+        f"win rate {s.get('win_rate', float('nan')):.0%}, cost drag {s.get('cost_drag', 0):.2%}",
     ]
     if inp.shuffle is not None:
         verdict = "SURVIVES" if inp.shuffle.survives else "DISCARD"
-        lines.append(f"shuffle control: p={inp.shuffle.p_value:.3f} [{verdict}]")
+        lines.append(f"shuffle control: p={inp.shuffle.p_value:.3f} [{verdict}] "
+                     f"(p<0.05 means it beats a returns-shuffled null)")
     if inp.pbo is not None:
         lines.append(f"PBO: {inp.pbo.pbo:.2f} [{'OVERFIT' if inp.pbo.overfit else 'OK'}]")
     if inp.dsr is not None:

@@ -44,6 +44,7 @@ def run_backtest(
     n_shuffles: int = 50,
     data_label: str = "real data",
     trials_path: str | Path | None = None,
+    client=None,
 ) -> dict:
     """Run ``config`` on ``source`` over ``[start, end]`` and write a report.
 
@@ -85,5 +86,5 @@ def run_backtest(
         f"config {out['config_hash']} · {data_label} · "
         f"{start:%Y-%m-%d}→{end:%Y-%m-%d} · {len(tickers)} names"
     )
-    out["report"] = write_strategy_report(out, close_w, out_dir, subtitle=subtitle)
+    out["report"] = write_strategy_report(out, close_w, out_dir, subtitle=subtitle, client=client)
     return out

@@ -24,22 +24,26 @@ from pathlib import Path
 from typing import Optional, Union
 
 from quantlab.web.jobs import JobQueue
-from quantlab.web.pages import audit_page, compare_page, dashboard_page
+from quantlab.web.pages import audit_page, compare_page, dashboard_page, run_detail_page
 from quantlab.web.service import (
     available_strategies,
     compare_report_path,
+    get_llm_client,
     latest_pbo,
     read_holdout_audit,
     read_trials,
     run_csv_backtest,
+    run_nl_backtest,
     run_pbo_comparison,
     run_synthetic_backtest,
 )
 from quantlab.web.store import RunStore
 
+_UNSET = object()
+
 
 def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int = 50,
-               max_workers: int = 2):
+               max_workers: int = 2, llm_client=_UNSET):
     from contextlib import asynccontextmanager
 
     from fastapi import FastAPI, HTTPException, Request
@@ -50,6 +54,8 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
         runs_dir = get_settings().experiments_dir / "web"
     store = RunStore(runs_dir)
     queue = JobQueue(max_workers=max_workers)
+    # Inject a client in tests; otherwise auto-detect (None if no key / extra).
+    client = get_llm_client() if llm_client is _UNSET else llm_client
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -64,7 +70,8 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard() -> HTMLResponse:
-        return HTMLResponse(dashboard_page(store.list(), available_strategies(), queue.list()))
+        return HTMLResponse(dashboard_page(
+            store.list(), available_strategies(), queue.list(), llm_available=client is not None))
 
     @app.get("/api/runs", response_class=JSONResponse)
     def list_runs() -> JSONResponse:
@@ -92,14 +99,27 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
             job = queue.submit(
                 "synthetic", strategy,
                 lambda: run_synthetic_backtest(
-                    store, strategy=strategy, n_positions=n_pos, n_shuffles=n_shuffles).id,
+                    store, strategy=strategy, n_positions=n_pos, n_shuffles=n_shuffles,
+                    client=client).id,
             )
             return JSONResponse({"job_id": job.id, "status": job.status}, status_code=202)
 
         form = await request.form()
         source = form.get("source", "synthetic")
 
-        if source == "csv":
+        if source == "nl":
+            idea = (form.get("idea") or "").strip()
+            if not idea:
+                raise HTTPException(status_code=422, detail="아이디어를 입력하세요")
+            if client is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="LLM 미설정 — ANTHROPIC_API_KEY 설정 후 pip install '.[llm]'")
+            queue.submit(
+                "nl", f"자연어: {idea[:32]}",
+                lambda: run_nl_backtest(store, idea=idea, client=client, n_shuffles=n_shuffles).id,
+            )
+        elif source == "csv":
             upload = form.get("csv")
             if upload is None or not getattr(upload, "filename", ""):
                 raise HTTPException(status_code=422, detail="CSV file is required")
@@ -119,7 +139,7 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
                 "csv", f"csv:{upload.filename}",
                 lambda: run_csv_backtest(
                     store, csv_path=dest, config_yaml=cfg,
-                    start=start_d, end=end_d, n_shuffles=n_shuffles).id,
+                    start=start_d, end=end_d, n_shuffles=n_shuffles, client=client).id,
             )
         else:
             strategy = form.get("strategy")
@@ -129,10 +149,18 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
             queue.submit(
                 "synthetic", strategy,
                 lambda: run_synthetic_backtest(
-                    store, strategy=strategy, n_positions=n_pos, n_shuffles=n_shuffles).id,
+                    store, strategy=strategy, n_positions=n_pos, n_shuffles=n_shuffles,
+                    client=client).id,
             )
 
         return RedirectResponse(url="/", status_code=303)
+
+    @app.get("/runs/{run_id}", response_class=HTMLResponse)
+    def run_detail(run_id: str):
+        rec = store.get(run_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        return HTMLResponse(run_detail_page(rec))
 
     @app.get("/runs/{run_id}/report", response_class=HTMLResponse)
     def run_report(run_id: str):
@@ -140,6 +168,34 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
         if path is None:
             raise HTTPException(status_code=404, detail="report not found")
         return FileResponse(path, media_type="text/html")
+
+    @app.post("/runs/{run_id}/delete")
+    def delete_run(run_id: str):
+        store.delete(run_id)
+        return RedirectResponse(url="/", status_code=303)
+
+    @app.post("/runs/{run_id}/rerun")
+    def rerun_run(run_id: str):
+        rec = store.get(run_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        if rec.source != "synthetic":
+            raise HTTPException(status_code=422, detail="only synthetic runs can be re-run in place")
+        strat, n_pos = rec.strategy, rec.n_positions
+        queue.submit(
+            "synthetic", strat,
+            lambda: run_synthetic_backtest(
+                store, strategy=strat, n_positions=n_pos, n_shuffles=n_shuffles,
+                client=client).id,
+        )
+        return RedirectResponse(url="/", status_code=303)
+
+    @app.post("/api/jobs/{job_id}/cancel")
+    def cancel_job(job_id: str, request: Request):
+        ok = queue.cancel(job_id)
+        if "application/json" in request.headers.get("content-type", ""):
+            return JSONResponse({"cancelled": ok})
+        return RedirectResponse(url="/", status_code=303)
 
     # --- compare (multiple-testing PBO) ------------------------------------
 

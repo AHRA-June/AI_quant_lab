@@ -122,9 +122,28 @@ def test_run_csv_backtest_real_data_path(tmp_path):
 # --- API -------------------------------------------------------------------
 
 
+class FakeLLM:
+    """Deterministic stand-in for an LLM: proposes a DSL config for a strategy idea,
+    and returns Korean commentary for a facts prompt — no network, no key."""
+
+    def complete(self, system: str, user: str) -> str:
+        if user.startswith("Strategy idea"):
+            return (
+                'alpha: "rank(returns(close, 20))"\n'
+                "universe: {market: [KOSPI, KOSDAQ], top_mktcap: 300, min_turnover: 5e8}\n"
+                "portfolio: {n_positions: 15, weighting: equal, rebalance: weekly}\n"
+            )
+        return "테스트 해설: 이 전략은 셔플 대조군을 이기지 못해 신뢰하기 어렵습니다."
+
+
 @pytest.fixture()
 def client(tmp_path):
-    return TestClient(create_app(tmp_path, n_shuffles=10))
+    return TestClient(create_app(tmp_path, n_shuffles=10, llm_client=None))
+
+
+@pytest.fixture()
+def client_llm(tmp_path):
+    return TestClient(create_app(tmp_path, n_shuffles=10, llm_client=FakeLLM()))
 
 
 def test_health(client):
@@ -243,3 +262,103 @@ def test_audit_lists_trials_including_the_run(client):
     assert r.status_code == 200
     assert "시도 로그" in r.text and STRAT in r.text
     assert "홀드아웃" in r.text          # holdout section present (locked banner)
+
+
+# --- run management (detail / delete / rerun / cancel) ---------------------
+
+
+def test_store_delete_removes_record_and_dir(tmp_path):
+    store = RunStore(tmp_path)
+    rec = run_synthetic_backtest(store, strategy=STRAT, n_shuffles=8)
+    assert store.report_path(rec.id) is not None
+    assert store.delete(rec.id) is True
+    assert store.get(rec.id) is None
+    assert not (tmp_path / "runs" / rec.id).exists()
+    assert store.delete("nope") is False          # idempotent on a missing id
+
+
+def test_run_detail_then_delete(client):
+    client.post("/api/runs", json={"strategy": STRAT, "n_positions": 10})
+    rid = _wait_runs(client, 1)[0]["id"]
+
+    detail = client.get(f"/runs/{rid}")
+    assert detail.status_code == 200 and STRAT in detail.text and "리포트" in detail.text
+    assert client.get("/runs/does-not-exist").status_code == 404
+
+    resp = client.post(f"/runs/{rid}/delete", follow_redirects=False)
+    assert resp.status_code == 303
+    assert client.get("/api/runs").json() == []
+    assert client.get(f"/runs/{rid}").status_code == 404
+
+
+def test_rerun_synthetic_enqueues_second_run(client):
+    client.post("/api/runs", json={"strategy": STRAT, "n_positions": 10})
+    rid = _wait_runs(client, 1)[0]["id"]
+    resp = client.post(f"/runs/{rid}/rerun", follow_redirects=False)
+    assert resp.status_code == 303
+    _wait_runs(client, 2)                          # a second run appears
+
+
+def test_run_nl_backtest_generates_dsl_runs_and_comments(tmp_path):
+    from quantlab.web.service import run_nl_backtest
+
+    store = RunStore(tmp_path)
+    rec = run_nl_backtest(store, idea="최근 20일 오른 종목을 산다", client=FakeLLM(), n_shuffles=8)
+    assert rec.source == "nl"
+    assert "returns(close, 20)" in rec.note                # generated DSL captured
+    html = store.report_path(rec.id).read_text(encoding="utf-8")
+    assert "테스트 해설" in html and "해설" in html          # LLM commentary embedded
+
+
+def test_nl_requires_client(tmp_path):
+    from quantlab.web.service import run_nl_backtest
+
+    with pytest.raises(ValueError):
+        run_nl_backtest(RunStore(tmp_path), idea="x", client=None, n_shuffles=5)
+
+
+def test_dashboard_nl_option_gated_on_llm(client, client_llm):
+    assert "LLM 미설정" in client.get("/").text            # disabled without a client
+    assert "자연어 아이디어 (LLM)" in client_llm.get("/").text
+
+
+def test_nl_endpoint_runs_with_injected_client(client_llm):
+    resp = client_llm.post(
+        "/api/runs", data={"source": "nl", "idea": "거래량이 급증한 종목을 산다"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    runs = _wait_runs(client_llm, 1)
+    assert runs[0]["source"] == "nl" and runs[0]["note"]
+
+
+def test_nl_endpoint_422_without_client(client):
+    resp = client.post("/api/runs", data={"source": "nl", "idea": "무언가"},
+                       follow_redirects=False)
+    assert resp.status_code == 422
+
+
+def test_commentary_embedded_in_synthetic_run_when_client_present(client_llm):
+    client_llm.post("/api/runs", json={"strategy": STRAT, "n_positions": 10})
+    rid = _wait_runs(client_llm, 1)[0]["id"]
+    assert "테스트 해설" in client_llm.get(f"/runs/{rid}/report").text
+
+
+def test_jobqueue_cancels_queued_but_not_running():
+    import threading
+    import time
+
+    from quantlab.web.jobs import JobQueue
+
+    q = JobQueue(max_workers=1)
+    gate = threading.Event()
+    a = q.submit("x", "blocker", lambda: (gate.wait(5), None)[1])
+    for _ in range(100):                           # wait until 'a' occupies the worker
+        if q.get(a.id).status == "running":
+            break
+        time.sleep(0.02)
+    b = q.submit("x", "queued", lambda: None)       # stuck behind 'a'
+    assert q.cancel(b.id) is True and q.get(b.id).status == "cancelled"
+    assert q.cancel(a.id) is False                  # running can't be interrupted
+    gate.set()
+    q.shutdown()
