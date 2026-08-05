@@ -111,3 +111,24 @@ def test_get_ticker_list_uses_snapped_date(monkeypatch):
     monkeypatch.setattr(pykrx_source, "_require_pykrx", lambda: fake)
     tickers = PykrxDataSource().get_ticker_list(date(2025, 5, 1), Market.KOSPI)
     assert fake.asked == "20250430" and tickers == ["005930", "000660"]
+
+
+def test_normalize_ohlcv_derives_value_when_vendor_omits_it():
+    # pykrx per-ticker OHLCV has 시가/고가/저가/종가/거래량/등락률 — no 거래대금.
+    idx = pd.to_datetime(["2025-07-01", "2025-07-02"])
+    raw = pd.DataFrame(
+        {"시가": [100, 101], "고가": [102, 103], "저가": [99, 100],
+         "종가": [101, 102], "거래량": [10, 20], "등락률": [0.1, 0.2]},
+        index=idx,
+    )
+    out = PykrxDataSource._normalize_ohlcv(raw)
+    assert list(out.columns) == ["open", "high", "low", "close", "volume", "value"]
+    assert out["value"].tolist() == [101 * 10, 102 * 20]      # derived close×volume
+
+
+def test_normalize_ohlcv_empty_frame_keeps_canonical_columns():
+    # a delisted/halted/no-data ticker returns empty — must NOT KeyError downstream.
+    out = PykrxDataSource._normalize_ohlcv(pd.DataFrame())
+    assert list(out.columns) == ["open", "high", "low", "close", "volume", "value"]
+    assert len(out) == 0
+    assert out["close"].empty          # the property that fixes KeyError: 'close'

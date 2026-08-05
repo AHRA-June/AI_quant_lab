@@ -181,11 +181,26 @@ class PykrxDataSource(DataSource):
         out["mktcap"] = df["시가총액"] if "시가총액" in df.columns else df.iloc[:, 0]
         return out
 
-    @staticmethod
-    def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
+    _CANON = ("open", "high", "low", "close", "volume", "value")
+
+    @classmethod
+    def _normalize_ohlcv(cls, df: pd.DataFrame) -> pd.DataFrame:
+        """Normalize a pykrx OHLCV frame to canonical columns.
+
+        Robust to two vendor realities: (1) per-ticker OHLCV omits 거래대금, so
+        ``value`` is derived as close×volume; (2) a delisted/halted/no-data ticker
+        comes back empty — we still return a frame carrying every canonical column
+        (empty) so downstream ``df["close"]`` never raises ``KeyError: 'close'``.
+        """
         df = df.rename(columns=_OHLCV_RENAME)
-        keep = [c for c in ("open", "high", "low", "close", "volume", "value") if c in df.columns]
+        if "value" not in df.columns and {"close", "volume"} <= set(df.columns):
+            df = df.assign(value=df["close"] * df["volume"])
+        keep = [c for c in cls._CANON if c in df.columns]
         df = df[keep].copy()
+        for col in cls._CANON:                      # guarantee all canonical columns
+            if col not in df.columns:
+                df[col] = pd.Series(dtype="float64")
+        df = df[list(cls._CANON)]
         df.index = pd.to_datetime(df.index)
         df.index.name = "date"
         return df
