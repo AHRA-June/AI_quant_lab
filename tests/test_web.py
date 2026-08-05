@@ -636,6 +636,39 @@ class _SnapshotDeadKRX(RichFakeDataSource):
         raise AssertionError("get_etf_etn_ticker_list must not be called on the KRX basket path")
 
 
+class _KRXWithDeadTicker(_SnapshotDeadKRX):
+    """One basket ticker (999999) has no data — reproduces the KeyError: 'close'
+    scenario. Its empty frame carries canonical columns, as the fixed pykrx
+    normalizer guarantees, so the pipeline must simply skip it, not crash."""
+
+    DEAD = "999999"
+    _CANON = ["open", "high", "low", "close", "volume", "value"]
+
+    def get_ohlcv(self, ticker, start, end):
+        if ticker == self.DEAD:
+            return pd.DataFrame(columns=self._CANON)
+        return super().get_ohlcv(ticker, start, end)
+
+    def get_adjusted_close(self, ticker, start, end):
+        if ticker == self.DEAD:
+            return pd.Series(dtype="float64", name="close")
+        return super().get_adjusted_close(ticker, start, end)
+
+
+def test_krx_basket_survives_a_ticker_with_no_data(tmp_path):
+    from datetime import date
+
+    from quantlab.web.service import run_krx_backtest
+
+    store = RunStore(tmp_path)
+    basket = ["100000", "100010", "999999", "100020"]     # 999999 returns nothing
+    rec = run_krx_backtest(
+        store, config_yaml=_CSV_CFG, start=date(2021, 6, 1), end=date(2022, 6, 1),
+        n_shuffles=6, source=_KRXWithDeadTicker(), tickers=basket,
+    )
+    assert rec.source == "krx" and store.report_path(rec.id).exists()
+
+
 def test_parse_tickers_normalizes_and_dedupes():
     from quantlab.web.service import parse_tickers
 

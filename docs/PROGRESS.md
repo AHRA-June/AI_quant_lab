@@ -117,6 +117,10 @@ KRX 실데이터는 `.[data]` + KRX 네트워크. **둘 다 없어도** 합성/C
   `parse_tickers`(6자리 정규화), UI에 KRX 전용 "종목 코드" 입력칸(기본 바스켓 프리필). 죽은 스냅샷
   엔드포인트 **호출 0**. `_SnapshotDeadKRX` fake로 그 사실을 테스트로 못박음. tickers 없으면 기존
   자동 유니버스 폴백(스냅샷 살아있는 환경용).
+- [x] (6) 바스켓 KRX 실행 `KeyError: 'close'` → 원인 둘: pykrx 종목별 OHLCV엔 **거래대금(value) 컬럼이
+  없고**, 데이터 없는(상폐/거래정지) 종목은 **빈 프레임**이 와서 `raw["close"]`가 터짐. `_normalize_ohlcv`가
+  이제 **value=close×volume 파생** + **항상 캐노니컬 6컬럼 보장**(빈 응답도 close 컬럼 존재) → 다운스트림
+  KeyError 소멸, 데이터 없는 종목은 조용히 스킵. 단위테스트(파생/빈프레임) + `_KRXWithDeadTicker` 통합테스트.
 
 ## 다음 후보 (아직 안 함)
 - **스크린/KRX 데이터 핀**: screen은 주입 source라 CSV처럼 파일-핀이 아님. 유니버스 패널을
