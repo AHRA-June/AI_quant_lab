@@ -40,6 +40,7 @@ from quantlab.web.service import (
     get_llm_client,
     krx_available,
     latest_pbo,
+    parse_tickers,
     read_holdout_audit,
     read_trials,
     read_screen,
@@ -167,11 +168,12 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=f"bad date: {exc}") from exc
             cfg = form.get("config_yaml") or ""
+            krx_tickers = parse_tickers(form.get("tickers")) or None
             queue.submit(
                 "krx", f"krx:{start_s}→{end_s}",
                 lambda: run_krx_backtest(
                     store, config_yaml=cfg, start=start_d, end=end_d,
-                    n_shuffles=n_shuffles, client=client).id,
+                    n_shuffles=n_shuffles, client=client, tickers=krx_tickers).id,
             )
         else:
             strategy = form.get("strategy")

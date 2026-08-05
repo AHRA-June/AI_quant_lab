@@ -45,19 +45,28 @@ def run_backtest(
     data_label: str = "real data",
     trials_path: str | Path | None = None,
     client=None,
+    tickers: list[str] | None = None,
 ) -> dict:
     """Run ``config`` on ``source`` over ``[start, end]`` and write a report.
 
     ``trials_path`` overrides where the run is logged; defaults to
     ``out_dir/trials.jsonl``. Point several runs at one path to keep the
     multiple-testing trial count complete across them (F7.1).
+
+    ``tickers`` overrides universe reconstruction with an explicit basket. Use
+    this when the vendor's cross-sectional snapshot endpoints (market-cap /
+    whole-market OHLCV) are unavailable but per-ticker OHLCV still works — the
+    universe is then exactly the given codes, fetched one by one.
     """
     from quantlab.demo import _evaluate, write_strategy_report  # local: avoids cycle
 
     store = PriceStore(source, OHLCVCache(cache_dir))
 
-    # 1. point-in-time universe as of `start`
-    tickers = UniverseBuilder(source, price_store=store).build(start, config.universe.to_spec())
+    # 1. universe — an explicit basket if given, else point-in-time as of `start`
+    if tickers is not None:
+        tickers = list(dict.fromkeys(t for t in tickers if t))  # dedupe, keep order
+    else:
+        tickers = UniverseBuilder(source, price_store=store).build(start, config.universe.to_spec())
     if not tickers:
         raise ValueError("empty universe — check date, market, and filters")
 
