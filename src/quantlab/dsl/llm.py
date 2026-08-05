@@ -63,6 +63,32 @@ portfolio: {{n_positions: 20, weighting: equal, rebalance: weekly}}
 """
 
 
+def build_screen_prompt() -> str:
+    """System prompt for translating a screening idea into a boolean filter."""
+    ops = ", ".join(sorted(P.OPERATORS))
+    fields = ", ".join(_FIELDS)
+    return f"""You translate a natural-language stock SCREENING condition into a boolean
+filter expression. Output ONLY the expression on one line — no prose, no code
+fences, no YAML.
+
+Allowed fields (panels, dates x tickers): {fields}
+Allowed operators ONLY: {ops}
+Allowed arithmetic: + - * / and unary minus. Numeric literals allowed.
+Comparisons: > < >= <=  (NOT == or !=). Combine conditions with `and`, `or`, `not`.
+ts_* operators look BACKWARD in time; rank/cs_* are cross-sectional at one date.
+No attributes, method calls, indexing, or any function not listed above.
+
+The whole expression MUST be a boolean condition (a comparison, or comparisons
+combined with and/or/not) — it evaluates to a yes/no mask per stock per day.
+
+Examples:
+- "20일 이동평균 위" -> close > ts_mean(close, 20)
+- "20일선 위이면서 거래량이 20일 평균의 2배 이상" -> close > ts_mean(close, 20) and volume > ts_mean(volume, 20) * 2
+- "최근 5일 10% 이상 상승" -> returns(close, 5) > 0.10
+- "60일 신고가 근처(고점의 95% 이상)" -> close >= ts_max(close, 60) * 0.95
+"""
+
+
 @runtime_checkable
 class LLMClient(Protocol):
     def complete(self, system: str, user: str) -> str:
@@ -128,3 +154,32 @@ class StrategyGenerator:
                     f"Return a corrected YAML config that fixes this error."
                 )
         raise DslError(f"LLM failed to produce a valid strategy: {last_error}")
+
+
+class ScreenGenerator:
+    """Natural-language screening idea → validated boolean filter expression."""
+
+    def __init__(self, client: LLMClient) -> None:
+        self.client = client
+        self.system = build_screen_prompt()
+
+    def generate(self, idea: str, *, max_retries: int = 1) -> str:
+        """Return a validated screen expression string; raise on repeated failure."""
+        from quantlab.dsl.screen import compile_screen
+
+        user = f"Screening idea:\n{idea}"
+        last_error: Exception | None = None
+        for _ in range(max_retries + 1):
+            expr = _extract_yaml(self.client.complete(self.system, user)).strip()
+            try:
+                compile_screen(expr)          # validates the whitelist + boolean shape
+                return expr
+            except (DslError, ValueError) as exc:
+                last_error = exc
+                user = (
+                    f"Screening idea:\n{idea}\n\n"
+                    f"Your previous output was invalid: {exc}\n"
+                    f"Previous output was:\n{expr}\n\n"
+                    f"Return a corrected one-line boolean expression."
+                )
+        raise DslError(f"LLM failed to produce a valid screen: {last_error}")

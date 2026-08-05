@@ -49,6 +49,119 @@ def get_llm_client():
     return AnthropicClient()
 
 
+def _safe_name(source, ticker: str) -> str:
+    try:
+        return source.get_ticker_name(ticker) or ticker
+    except Exception:  # noqa: BLE001 — metadata is best-effort
+        return ticker
+
+
+def read_screen(store: RunStore, run_id: str) -> dict | None:
+    """The persisted snapshot (matching stocks) for a screen run."""
+    import json
+
+    p = store.base / "runs" / run_id / "screen.json"
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+
+
+def run_screen(
+    store: RunStore,
+    *,
+    source,
+    config_yaml: str,
+    start: date,
+    end: date,
+    criteria: str | None = None,
+    screen_expr: str | None = None,
+    client=None,
+    n_shuffles: int = 50,
+    warmup_days: int = 400,
+    ref_date=None,
+    data_label: str = "실데이터",
+) -> RunRecord:
+    """Screen a universe by a boolean condition, then backtest the matches.
+
+    Natural-language ``criteria`` is turned into a validated boolean filter (or pass
+    ``screen_expr`` directly). At the reference date (default: last day) the matching
+    stocks are listed; over the window they are held equal-weight (rebalanced per the
+    config) and run through the standard backtest + integrity pipeline.
+    """
+    import json
+    from datetime import timedelta
+
+    import pandas as pd
+
+    from quantlab.data.cache import OHLCVCache, PriceStore
+    from quantlab.data.panels import adjusted_panels
+    from quantlab.data.universe import UniverseBuilder
+    from quantlab.dsl.config import StrategyConfig
+    from quantlab.dsl.screen import compile_screen
+    from quantlab.factors.portfolio import apply_rebalance
+
+    config = StrategyConfig.from_yaml(config_yaml)
+    if screen_expr is None:
+        if client is None:
+            raise ValueError("LLM is not configured (set ANTHROPIC_API_KEY and install '.[llm]')")
+        if not (criteria or "").strip():
+            raise ValueError("조건을 입력하세요")
+        from quantlab.dsl.llm import ScreenGenerator
+        screen_expr = ScreenGenerator(client).generate(criteria)
+    screen_fn = compile_screen(screen_expr)
+
+    created = _now_iso()
+    run_id = RunRecord.new_id(created, "screen")
+    run_dir = store.run_dir(run_id)
+
+    px = PriceStore(source, OHLCVCache(store.base / "cache" / run_id))
+    tickers = UniverseBuilder(source, price_store=px).build(start, config.universe.to_spec())
+    if not tickers:
+        raise ValueError("빈 유니버스 — 날짜/시장/필터를 확인하세요")
+    panels = adjusted_panels(px, tickers, start - timedelta(days=warmup_days), end)
+    close = panels["close"]
+    ctx = {"open": panels["open"], "high": panels["high"], "low": panels["low"],
+           "close": close, "volume": panels["volume"], "value": close * panels["volume"]}
+
+    in_window = close.index >= pd.Timestamp(start)
+    mask = screen_fn(ctx).loc[in_window].reindex(columns=close.columns).fillna(False)
+    close_w = close.loc[in_window]
+
+    # snapshot at the reference date (default: last day in the window)
+    ref_ts = pd.Timestamp(ref_date) if ref_date else mask.index[-1]
+    if ref_ts not in mask.index:
+        earlier = mask.index[mask.index <= ref_ts]
+        ref_ts = earlier[-1] if len(earlier) else mask.index[-1]
+    passing = [t for t in mask.columns if bool(mask.loc[ref_ts, t])]
+    matches = [{"ticker": t, "name": _safe_name(source, t),
+                "close": float(close_w.loc[ref_ts, t])} for t in passing]
+
+    # backtest: hold the matches equal-weight, rebalanced per the config
+    w = mask.astype(float)
+    denom = w.sum(axis=1)
+    weights = w.div(denom.where(denom > 0), axis=0).fillna(0.0)   # equal-weight the matches
+    weights = apply_rebalance(weights, config.portfolio.rebalance)
+    out = _evaluate(mask.astype(float), weights, close_w, store.base / "trials.jsonl",
+                    n_shuffles, label="screen")
+    write_strategy_report(
+        out, close_w, run_dir, client=client,
+        subtitle=f"종목 찾기 · {data_label} · {start:%Y-%m-%d}→{end:%Y-%m-%d} · "
+                 f"{ref_ts:%Y-%m-%d} 기준 {len(matches)}종목",
+    )
+
+    (run_dir / "screen.json").write_text(json.dumps({
+        "expr": screen_expr, "criteria": criteria or "", "ref_date": f"{ref_ts:%Y-%m-%d}",
+        "universe_size": len(tickers), "data_label": data_label, "matches": matches,
+    }, ensure_ascii=False), encoding="utf-8")
+
+    record = _record_from_out(
+        out, id=run_id, created_at=created,
+        strategy=(criteria or screen_expr)[:48].replace("\n", " "), source="screen",
+        n_positions=len(matches), universe_size=len(tickers),
+        window=f"{start:%Y-%m-%d}→{end:%Y-%m-%d}", note=screen_expr,
+    )
+    store.append(record)
+    return record
+
+
 def krx_available() -> bool:
     """True when the live KRX source can run (the `data` extra is installed)."""
     try:

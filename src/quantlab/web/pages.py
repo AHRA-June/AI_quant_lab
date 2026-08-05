@@ -115,8 +115,8 @@ def _num(x, fmt: str = ".2f") -> str:
 
 
 def _nav(active: str) -> str:
-    items = [("/", "대시보드", "dashboard"), ("/compare", "비교", "compare"),
-             ("/audit", "무결성 감사", "audit")]
+    items = [("/", "대시보드", "dashboard"), ("/screen", "종목 찾기", "screen"),
+             ("/compare", "비교", "compare"), ("/audit", "무결성 감사", "audit")]
     links = "".join(
         f'<a href="{href}" class="{"active" if key == active else ""}">{label}</a>'
         for href, label, key in items
@@ -382,6 +382,106 @@ def audit_page(trials: list[dict], holdout: list[dict]) -> str:
 <h2>홀드아웃 접근 감사</h2>
 {holdout_html}"""
     return _shell("무결성 감사", "audit", inner)
+
+
+# --- screener --------------------------------------------------------------
+
+_SCREEN_EXAMPLE = "close > ts_mean(close, 20) and volume > ts_mean(volume, 20) * 2"
+
+
+def screen_page(records: list[RunRecord], *, llm_available: bool, krx_available: bool,
+                default_yaml: str) -> str:
+    screens = [r for r in records if r.source == "screen"]
+    krx_option = ('<option value="krx">KRX 일봉</option>' if krx_available
+                  else '<option value="krx" disabled>KRX (pykrx 미설치)</option>')
+    nl_field = (f"""
+    <label style="min-width:340px;flex:1">조건 (자연어)
+      <textarea name="criteria" rows="2" placeholder="예: 20일 이동평균 위이면서 거래량이 20일 평균의 2배 이상"
+        style="font:14px inherit;width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px 11px"></textarea>
+    </label>""" if llm_available else
+        '<div class="hint" style="flex-basis:100%">자연어 입력은 LLM 키가 있을 때 켜집니다. '
+        '지금은 아래 <b>직접 조건식</b>으로 쓰세요.</div>')
+
+    if screens:
+        rows = "".join(
+            f'<tr><td><a href="/screen/{_e(r.id)}">{_e(r.strategy)}</a></td>'
+            f"<td>{_e(r.source)}</td><td>{r.n_positions}</td><td>{_e(r.window)}</td>"
+            f"<td>{_e(r.created_at)}</td></tr>" for r in screens
+        )
+        recent = ('<table class="tbl"><tr><th>조건</th><th>데이터</th><th>매칭 종목</th>'
+                  '<th>기간</th><th>실행 시각</th></tr>' + rows + "</table>")
+    else:
+        recent = '<div class="empty">아직 실행한 종목 찾기가 없습니다.</div>'
+
+    inner = f"""
+<h2>종목 찾기 (스크리너)</h2>
+<div class="desc">조건을 만족하는 종목을 <b>찾아 리스트로</b> 보여주고, 그 종목들을 동일가중으로
+담았을 때의 <b>백테스트 성과</b>까지 냅니다. 조건은 자연어 또는 직접 조건식으로.</div>
+<form class="new" method="post" action="/api/screen" enctype="multipart/form-data">
+  <label>데이터
+    <select name="source" id="scr-source">
+      <option value="csv">CSV 업로드</option>
+      {krx_option}
+    </select>
+  </label>
+  <div id="scr-csv" class="src-fields"><label>OHLCV CSV 파일<input type="file" name="csv" accept=".csv"></label></div>
+  <label>시작일<input type="date" name="start"></label>
+  <label>종료일<input type="date" name="end"></label>
+  {nl_field}
+  <label style="min-width:340px;flex:1">직접 조건식 (불리언)
+    <textarea name="screen_expr" rows="2" placeholder="예: {_SCREEN_EXAMPLE}"
+      style="font:12px var(--mono);width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px 11px"></textarea>
+  </label>
+  <label style="min-width:300px;flex:1">유니버스·리밸런스 (DSL YAML · alpha는 무시)
+    <textarea name="config_yaml" rows="3"
+      style="font:12px var(--mono);width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px 11px">{default_yaml}</textarea>
+  </label>
+  <button class="go" type="submit">종목 찾기 실행</button>
+</form>
+<div class="hint">비교: <code>&gt; &lt; &gt;= &lt;=</code> · 결합: <code>and</code> <code>or</code> <code>not</code>
+ · 연산자: rank, ts_mean, ts_max, returns, delay … (<code>==</code>는 불가). 자연어 없이 직접 조건식만 써도 됩니다.</div>
+<h2>최근 종목 찾기</h2>
+{recent}
+<script>
+(function(){{
+  var sel=document.getElementById('scr-source'), csv=document.getElementById('scr-csv');
+  function upd(){{ csv.style.display = (sel.value==='csv') ? '' : 'none'; }}
+  sel.addEventListener('change', upd); upd();
+}})();
+</script>"""
+    return _shell("종목 찾기", "screen", inner)
+
+
+def screen_result_page(r: RunRecord, snap: dict) -> str:
+    matches = snap.get("matches", [])
+    if matches:
+        rows = "".join(
+            f'<tr><td>{_e(m.get("name") or m["ticker"])}</td><td>{_e(m["ticker"])}</td>'
+            f'<td>{m.get("close", float("nan")):,.0f}</td></tr>' for m in matches
+        )
+        table = ('<table class="tbl"><tr><th>종목</th><th>코드</th><th>종가</th></tr>'
+                 + rows + "</table>")
+    else:
+        table = '<div class="empty">조건을 만족하는 종목이 없습니다.</div>'
+    crit = snap.get("criteria") or ""
+    inner = f"""
+<h2 style="margin-top:20px">종목 찾기 결과</h2>
+{f'<div class="desc">{_e(crit)}</div>' if crit else ""}
+<div class="dsl"><span>조건식</span><code>{_e(snap.get("expr",""))}</code></div>
+<div class="detailmeta">
+  <div><div class="k">기준일</div><div class="v">{_e(snap.get("ref_date",""))}</div></div>
+  <div><div class="k">매칭 종목</div><div class="v">{len(matches)}</div></div>
+  <div><div class="k">유니버스</div><div class="v">{snap.get("universe_size",0)}</div></div>
+  <div><div class="k">기간</div><div class="v">{_e(r.window)}</div></div>
+</div>
+<div class="actions">
+  <a class="report" href="/runs/{_e(r.id)}/report" target="_blank">이 종목들 담았을 때 성과 리포트 ↗</a>
+  <form method="post" action="/runs/{_e(r.id)}/delete" class="inline" style="margin-left:auto"
+        onsubmit="return confirm('삭제할까요?')"><button class="danger" type="submit">삭제</button></form>
+</div>
+<h2>기준일({_e(snap.get("ref_date",""))}) 매칭 종목 · {len(matches)}개</h2>
+{table}"""
+    return _shell("종목 찾기 결과", "screen", inner)
 
 
 # --- run detail ------------------------------------------------------------
