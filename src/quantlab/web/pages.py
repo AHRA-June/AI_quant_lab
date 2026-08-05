@@ -89,11 +89,70 @@ tr.dim td{opacity:.45}
 .pbocard .v{font-family:var(--mono);font-size:18px;font-weight:600}
 .banner{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:8px;padding:12px 15px;color:var(--muted2);font-size:13px}
 .foot{color:var(--muted);font-family:var(--mono);font-size:10.5px;margin-top:34px;padding-top:14px;border-top:1px solid var(--line)}
+.datefield{position:relative;display:inline-block}
+.datefield .dfin{cursor:pointer;min-width:150px}
+.cal{position:absolute;z-index:60;top:calc(100% + 5px);left:0;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px;box-shadow:0 10px 30px rgba(0,0,0,.30)}
+.calhd{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;font-weight:700;font-size:13px;gap:8px}
+.calhd button{background:var(--panel2);border:1px solid var(--line);color:var(--fg);border-radius:6px;width:28px;height:28px;cursor:pointer;font-size:15px;min-width:0;padding:0;line-height:1}
+.calgrid{display:grid;grid-template-columns:repeat(7,32px);gap:2px}
+.calgrid .cw{font-size:11px;color:var(--muted);text-align:center;padding:2px 0}
+.calgrid .cd{background:none;border:0;color:var(--fg);border-radius:6px;height:30px;cursor:pointer;font:13px var(--mono);padding:0;min-width:0}
+.calgrid .cd:hover{background:var(--panel2)}
+.calgrid .cd.sel{background:var(--primary);color:#00285d}
+@media (prefers-color-scheme:light){.calgrid .cd.sel{color:#fff}}
+.frow{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;width:100%}
+details.adv{width:100%;margin-top:2px}
+details.adv summary{cursor:pointer;color:var(--primary);font-size:13px;user-select:none}
+details.adv textarea{margin-top:8px}
+.presetdesc{color:var(--muted2);font-size:12.5px;width:100%;margin-top:-4px}
 """
 
 DEFAULT_CONFIG_YAML = """alpha: "rank(returns(close, 120)) * rank(ts_mean(volume, 20) / ts_mean(volume, 60))"
 universe: {market: [KOSPI], top_mktcap: 100, min_turnover: 1e7}
 portfolio: {n_positions: 20, weighting: equal, rebalance: monthly}"""
+
+# Self-contained pop-up calendar (no native <input type=date>, no external libs).
+# Every element with class "datefield" and a data-name attr becomes a day-picker
+# that writes YYYY-MM-DD into a hidden input of that name (what the backend parses).
+_CAL_JS = r"""
+function qcal(host){
+  var name=host.getAttribute('data-name');
+  var hidden=document.createElement('input'); hidden.type='hidden'; hidden.name=name;
+  var text=document.createElement('input'); text.type='text'; text.readOnly=true;
+  text.className='dfin'; text.placeholder='YYYY-MM-DD'; text.autocomplete='off';
+  var pop=document.createElement('div'); pop.className='cal'; pop.style.display='none';
+  host.appendChild(hidden); host.appendChild(text); host.appendChild(pop);
+  var view=new Date(); view.setDate(1); var sel=null;
+  function pad(n){return String(n).padStart(2,'0');}
+  function render(){
+    var y=view.getFullYear(), m=view.getMonth();
+    var start=new Date(y,m,1).getDay(), days=new Date(y,m+1,0).getDate();
+    var h='<div class="calhd"><button type="button" data-nav="-1">‹</button>'
+         +'<span>'+y+'년 '+(m+1)+'월</span>'
+         +'<button type="button" data-nav="1">›</button></div><div class="calgrid">';
+    ['일','월','화','수','목','금','토'].forEach(function(w){h+='<span class="cw">'+w+'</span>';});
+    for(var i=0;i<start;i++) h+='<span></span>';
+    for(var d=1;d<=days;d++){var iso=y+'-'+pad(m+1)+'-'+pad(d);
+      h+='<button type="button" class="cd'+(sel===iso?' sel':'')+'" data-iso="'+iso+'">'+d+'</button>';}
+    pop.innerHTML=h+'</div>';
+  }
+  function open(){pop.style.display='block'; if(sel) view=new Date(sel+'T00:00:00'), view.setDate(1); render();}
+  text.addEventListener('click',function(){pop.style.display==='none'?open():(pop.style.display='none');});
+  pop.addEventListener('click',function(e){
+    var nav=e.target.getAttribute('data-nav');
+    if(nav){view.setMonth(view.getMonth()+parseInt(nav,10)); render(); return;}
+    var iso=e.target.getAttribute('data-iso');
+    if(iso){sel=iso; hidden.value=iso; text.value=iso; pop.style.display='none';}
+  });
+  document.addEventListener('click',function(e){if(!host.contains(e.target)) pop.style.display='none';});
+}
+document.querySelectorAll('.datefield').forEach(qcal);
+"""
+
+
+def _datefield(name: str) -> str:
+    """Placeholder span the calendar JS upgrades into a day-picker for ``name``."""
+    return f'<span class="datefield" data-name="{_e(name)}"></span>'
 
 
 def _e(s: object) -> str:
@@ -238,11 +297,43 @@ def dashboard_page(records: list[RunRecord], strategies: list[str], jobs: list |
     <label>OHLCV CSV 파일<input type="file" name="csv" accept=".csv"></label>
   </div>
   <div id="fields-realdata" class="src-fields" style="display:none">
-    <label>시작일<input type="date" name="start"></label>
-    <label>종료일<input type="date" name="end"></label>
-    <label style="min-width:320px;flex:1">전략 설정 (DSL YAML)
+    <div class="frow">
+      <label>시작일{_datefield("start")}</label>
+      <label>종료일{_datefield("end")}</label>
+    </div>
+    <div class="frow">
+      <label>전략 프리셋
+        <select id="preset-select">
+          <option value="momentum_vol">모멘텀+거래량 (기본)</option>
+          <option value="momentum">모멘텀 (6개월 추세)</option>
+          <option value="reversal">단기 반전 (5일 반등)</option>
+          <option value="lowvol">저변동성 (안정)</option>
+          <option value="value_surge">거래대금 급증</option>
+        </select>
+      </label>
+      <label>시장
+        <select id="mk-select">
+          <option value="KOSPI">코스피</option>
+          <option value="KOSDAQ">코스닥</option>
+          <option value="KOSPI,KOSDAQ">코스피+코스닥</option>
+        </select>
+      </label>
+      <label>상위 시가총액<input type="number" id="topn-input" value="100" min="10" max="1000" step="10"></label>
+      <label>보유 종목 수<input type="number" id="npos-input" value="20" min="1" max="50"></label>
+      <label>리밸런스
+        <select id="rebal-select">
+          <option value="monthly">월간</option>
+          <option value="weekly">주간</option>
+          <option value="daily">일간</option>
+        </select>
+      </label>
+    </div>
+    <div class="presetdesc" id="preset-desc"></div>
+    <details class="adv">
+      <summary>고급 — DSL 수식 직접 편집 (YAML)</summary>
       <textarea name="config_yaml" rows="4" style="font:12px var(--mono);width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px 11px">{default_yaml}</textarea>
-    </label>
+      <div class="hint">위 폼을 바꾸면 이 YAML이 자동으로 다시 채워집니다. 여기서 직접 고치면 그 값이 그대로 실행됩니다.</div>
+    </details>
   </div>
   <button class="go" type="submit">백테스트 실행</button>
 </form>
@@ -268,6 +359,37 @@ volume, Name</b> long-format 파일을 올리면 실데이터로 동일 파이�
     }});
   }}
   sel.addEventListener('change', upd); upd();
+}})();
+{_CAL_JS}
+(function(){{
+  var PRESETS={{
+    momentum_vol:{{alpha:'rank(returns(close, 120)) * rank(ts_mean(volume, 20) / ts_mean(volume, 60))',
+      desc:'6개월 상승 추세와 거래량 증가를 함께 보는 기본 전략'}},
+    momentum:{{alpha:'rank(returns(close, 120))',
+      desc:'최근 6개월(약 120거래일) 많이 오른 종목을 산다 — 추세추종'}},
+    reversal:{{alpha:'rank(-returns(close, 5))',
+      desc:'최근 5일 많이 빠진 종목의 단기 반등을 노린다 — 역추세'}},
+    lowvol:{{alpha:'rank(-ts_std(returns(close, 1), 20))',
+      desc:'최근 20일 변동성이 낮은 안정적인 종목을 산다'}},
+    value_surge:{{alpha:'rank(ts_mean(value, 5) / ts_mean(value, 60))',
+      desc:'최근 거래대금이 평소보다 급증한(관심 몰린) 종목을 산다'}}
+  }};
+  function g(id){{return document.getElementById(id);}}
+  function buildYaml(){{
+    var p=PRESETS[g('preset-select').value]||PRESETS.momentum_vol;
+    var mk='['+g('mk-select').value.split(',').join(', ')+']';
+    var top=g('topn-input').value||100, npos=g('npos-input').value||20, reb=g('rebal-select').value;
+    var y='alpha: "'+p.alpha+'"\\n'
+      +'universe: {{market: '+mk+', top_mktcap: '+top+', min_turnover: 1e7}}\\n'
+      +'portfolio: {{n_positions: '+npos+', weighting: equal, rebalance: '+reb+'}}';
+    var ta=document.querySelector('#fields-realdata textarea[name=config_yaml]');
+    if(ta) ta.value=y;
+    var dd=g('preset-desc'); if(dd) dd.textContent='➤ '+p.desc;
+  }}
+  ['preset-select','mk-select','topn-input','npos-input','rebal-select'].forEach(function(id){{
+    var el=g(id); if(el){{el.addEventListener('change',buildYaml); el.addEventListener('input',buildYaml);}}
+  }});
+  if(g('preset-select')) buildYaml();
 }})();
 </script>"""
     return _shell("대시보드", "dashboard", inner, refresh=2 if active else None)
@@ -425,8 +547,8 @@ def screen_page(records: list[RunRecord], *, llm_available: bool, krx_available:
     </select>
   </label>
   <div id="scr-csv" class="src-fields"><label>OHLCV CSV 파일<input type="file" name="csv" accept=".csv"></label></div>
-  <label>시작일<input type="date" name="start"></label>
-  <label>종료일<input type="date" name="end"></label>
+  <label>시작일{_datefield("start")}</label>
+  <label>종료일{_datefield("end")}</label>
   {nl_field}
   <label style="min-width:340px;flex:1">직접 조건식 (불리언)
     <textarea name="screen_expr" rows="2" placeholder="예: {_SCREEN_EXAMPLE}"
@@ -448,6 +570,7 @@ def screen_page(records: list[RunRecord], *, llm_available: bool, krx_available:
   function upd(){{ csv.style.display = (sel.value==='csv') ? '' : 'none'; }}
   sel.addEventListener('change', upd); upd();
 }})();
+{_CAL_JS}
 </script>"""
     return _shell("종목 찾기", "screen", inner)
 
