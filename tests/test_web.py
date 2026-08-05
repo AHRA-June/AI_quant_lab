@@ -167,3 +167,32 @@ def test_csv_without_file_returns_422(client):
 
 def test_missing_report_404(client):
     assert client.get("/runs/does-not-exist/report").status_code == 404
+
+
+# --- compare + audit -------------------------------------------------------
+
+
+def test_compare_page_ranks_runs(client):
+    client.post("/api/runs", json={"strategy": STRAT, "n_positions": 10})
+    r = client.get("/compare")
+    assert r.status_code == 200 and "다중검정 PBO 분석" in r.text and STRAT in r.text
+
+
+def test_pbo_analysis_runs_and_report_served(client):
+    # before analysis, the full report 404s
+    assert client.get("/compare/report").status_code == 404
+    resp = client.post("/api/compare", json={})
+    assert resp.status_code == 201
+    summary = resp.json()
+    assert 0.0 <= summary["pbo"] <= 1.0 and summary["n_strategies"] >= 2
+    # report now available, and the compare page shows the verdict
+    assert client.get("/compare/report").status_code == 200
+    assert "과최적화 확률" in client.get("/compare").text
+
+
+def test_audit_lists_trials_including_the_run(client):
+    client.post("/api/runs", json={"strategy": STRAT, "n_positions": 10})
+    r = client.get("/audit")
+    assert r.status_code == 200
+    assert "시도 로그" in r.text and STRAT in r.text
+    assert "홀드아웃" in r.text          # holdout section present (locked banner)

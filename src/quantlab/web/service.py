@@ -100,6 +100,7 @@ def run_csv_backtest(
         source, config, start=start, end=end,
         cache_dir=store.base / "cache" / run_id, out_dir=run_dir,
         n_shuffles=n_shuffles, data_label=data_label,
+        trials_path=store.base / "trials.jsonl",   # one shared log → complete trial count
     )
     record = _record_from_out(
         out, id=run_id, created_at=created, strategy=f"csv:{label[:8]}", source="csv",
@@ -109,6 +110,69 @@ def run_csv_backtest(
     )
     store.append(record)
     return record
+
+
+def run_pbo_comparison(store: RunStore) -> dict:
+    """Run the multiple-testing PBO/DSR analysis over the hand-crafted strategy set.
+
+    PBO and the Deflated Sharpe only mean something *across many candidates on one
+    dataset*, so this wraps the existing ``run_comparison`` (7 strategies, synthetic
+    data). Persists a small summary (``compare/pbo.json``) the Compare page reads,
+    and a full comparison report served at ``/compare/report``.
+    """
+    import json
+
+    from quantlab.demo import run_comparison
+
+    out_dir = store.base / "compare"
+    out = run_comparison(out_dir)          # writes comparison.html into out_dir
+    summary = {
+        "created_at": _now_iso(),
+        "pbo": float(out["pbo"].pbo),
+        "overfit": bool(out["pbo"].overfit),
+        "dsr": float(out["dsr"]),
+        "best": str(out["best"]),
+        "n_strategies": int(out["n"]),
+        "report_file": "comparison.html",
+    }
+    (out_dir / "pbo.json").write_text(json.dumps(summary, ensure_ascii=False), encoding="utf-8")
+    return summary
+
+
+def latest_pbo(store: RunStore) -> dict | None:
+    import json
+
+    p = store.base / "compare" / "pbo.json"
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+
+
+def compare_report_path(store: RunStore):
+    p = store.base / "compare" / "comparison.html"
+    return p if p.exists() else None
+
+
+def read_trials(store: RunStore) -> list[dict]:
+    """All logged trials (failures included), newest first."""
+    import json
+
+    p = store.base / "trials.jsonl"
+    if not p.exists():
+        return []
+    out = [json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    out.reverse()
+    return out
+
+
+def read_holdout_audit(store: RunStore) -> list[dict]:
+    """Holdout access records, newest first (empty if the vault was never unlocked)."""
+    import json
+
+    p = store.base / "holdout_audit.jsonl"
+    if not p.exists():
+        return []
+    out = [json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    out.reverse()
+    return out
 
 
 def _record_from_out(out: dict, *, id: str, created_at: str, strategy: str, source: str,

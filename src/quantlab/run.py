@@ -43,8 +43,14 @@ def run_backtest(
     warmup_days: int = 400,
     n_shuffles: int = 50,
     data_label: str = "real data",
+    trials_path: str | Path | None = None,
 ) -> dict:
-    """Run ``config`` on ``source`` over ``[start, end]`` and write a report."""
+    """Run ``config`` on ``source`` over ``[start, end]`` and write a report.
+
+    ``trials_path`` overrides where the run is logged; defaults to
+    ``out_dir/trials.jsonl``. Point several runs at one path to keep the
+    multiple-testing trial count complete across them (F7.1).
+    """
     from quantlab.demo import _evaluate, write_strategy_report  # local: avoids cycle
 
     store = PriceStore(source, OHLCVCache(cache_dir))
@@ -70,7 +76,7 @@ def run_backtest(
     close_w = close.loc[in_window]
 
     # 5. evaluate + report (reuses the M1 backtest + F7 integrity + M4 report)
-    trials_path = Path(out_dir) / "trials.jsonl"
+    trials_path = Path(trials_path) if trials_path else Path(out_dir) / "trials.jsonl"
     out = _evaluate(
         alpha, weights, close_w, trials_path, n_shuffles, label=config.content_hash()
     )

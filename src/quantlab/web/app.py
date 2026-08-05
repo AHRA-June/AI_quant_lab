@@ -15,10 +15,15 @@ without the web extra installed.
 from pathlib import Path
 from typing import Optional, Union
 
-from quantlab.web.pages import dashboard_page
+from quantlab.web.pages import audit_page, compare_page, dashboard_page
 from quantlab.web.service import (
     available_strategies,
+    compare_report_path,
+    latest_pbo,
+    read_holdout_audit,
+    read_trials,
     run_csv_backtest,
+    run_pbo_comparison,
     run_synthetic_backtest,
 )
 from quantlab.web.store import RunStore
@@ -110,5 +115,31 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
         if path is None:
             raise HTTPException(status_code=404, detail="report not found")
         return FileResponse(path, media_type="text/html")
+
+    # --- compare (multiple-testing PBO) ------------------------------------
+
+    @app.get("/compare", response_class=HTMLResponse)
+    def compare() -> HTMLResponse:
+        return HTMLResponse(compare_page(store.list(), latest_pbo(store)))
+
+    @app.post("/api/compare")
+    def create_compare(request: Request):
+        run_pbo_comparison(store)
+        if "application/json" in request.headers.get("content-type", ""):
+            return JSONResponse(latest_pbo(store), status_code=201)
+        return RedirectResponse(url="/compare", status_code=303)
+
+    @app.get("/compare/report", response_class=HTMLResponse)
+    def compare_report():
+        path = compare_report_path(store)
+        if path is None:
+            raise HTTPException(status_code=404, detail="run the PBO analysis first")
+        return FileResponse(path, media_type="text/html")
+
+    # --- integrity audit ---------------------------------------------------
+
+    @app.get("/audit", response_class=HTMLResponse)
+    def audit() -> HTMLResponse:
+        return HTMLResponse(audit_page(read_trials(store), read_holdout_audit(store)))
 
     return app
