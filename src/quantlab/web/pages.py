@@ -488,7 +488,51 @@ def screen_result_page(r: RunRecord, snap: dict) -> str:
 # --- run detail ------------------------------------------------------------
 
 
-def run_detail_page(r: RunRecord) -> str:
+def _repro_section(r: RunRecord, bundle: dict | None) -> str:
+    if bundle is None:
+        return ""
+    ver = bundle.get("version", {})
+    verline = " · ".join(
+        f"{k} {_e(str(v))}" for k, v in ver.items()) if ver else ""
+    reproducible = bool(bundle.get("reproducible"))
+    if reproducible:
+        rbadge = '<span class="badge pass">자동 재현</span>'
+    else:
+        rbadge = '<span class="badge">외부 데이터</span>'
+    reason = bundle.get("reason") or ""
+    v = bundle.get("verification")
+    if v is None:
+        vline = '<span class="hint">아직 검증하지 않음</span>'
+    elif v.get("matches"):
+        vline = ('<span class="badge pass">지문 일치</span> '
+                 f'<code>{_e(str(v.get("reproduced_fingerprint","")))}</code>'
+                 f' · {_e(str(v.get("checked_at","")))}')
+    else:
+        vline = ('<span class="badge fail">지문 불일치</span> '
+                 f'<code>{_e(str(v.get("reproduced_fingerprint","")))}</code>'
+                 f' · {_e(str(v.get("checked_at","")))}')
+    if reproducible:
+        verify = (f'<form method="post" action="/runs/{_e(r.id)}/reproduce" class="inline">'
+                  f'<button class="go" type="submit">재현 검증</button></form>')
+    else:
+        verify = f'<span class="hint">{_e(reason)}</span>' if reason else ""
+    return f"""
+<h2>재현성 번들</h2>
+<div class="desc">실행에 필요한 입력·시드·버전과 결과 <b>지문</b>을 함께 저장합니다. {rbadge}</div>
+<div class="detailmeta">
+  <div><div class="k">결과 지문</div><div class="v"><code>{_e(str(bundle.get("fingerprint","")))}</code></div></div>
+  <div><div class="k">종류</div><div class="v">{_e(str(bundle.get("kind","")))}</div></div>
+  <div><div class="k">생성 시각</div><div class="v">{_e(str(bundle.get("created_at","")))}</div></div>
+</div>
+{f'<div class="desc">{verline}</div>' if verline else ""}
+<div class="desc">검증: {vline}</div>
+<div class="actions">
+  {verify}
+  <a class="report" href="/runs/{_e(r.id)}/bundle.json" style="margin-left:auto">번들 JSON 다운로드 ↓</a>
+</div>"""
+
+
+def run_detail_page(r: RunRecord, bundle: dict | None = None) -> str:
     badge = ("pass", "통과") if r.survives else ("fail", "폐기")
     dd_neg = " neg" if r.max_drawdown < 0 else ""
     scope = f"유니버스 {r.universe_size} · {_e(r.window)}" if r.universe_size else f"종목 {r.n_positions}개"
@@ -517,6 +561,7 @@ def run_detail_page(r: RunRecord) -> str:
   </form>
   <a class="report" href="/runs/{_e(r.id)}/report" target="_blank" style="margin-left:auto">새 탭에서 리포트 열기 ↗</a>
 </div>
+{_repro_section(r, bundle)}
 <h2>리포트</h2>
 <iframe class="report" src="/runs/{_e(r.id)}/report" title="report"></iframe>"""
     return _shell(r.strategy, "dashboard", inner)
