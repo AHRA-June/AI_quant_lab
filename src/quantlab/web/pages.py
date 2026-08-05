@@ -67,6 +67,9 @@ button.danger{background:none;border:1px solid color-mix(in srgb,var(--bad) 55%,
 .detailmeta .v{font-family:var(--mono);font-size:15px;font-weight:600}
 .actions{display:flex;gap:10px;align-items:center;margin:8px 0 4px}
 iframe.report{width:100%;height:78vh;border:1px solid var(--line);border-radius:12px;background:#fff}
+.dsl{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:6px 0 2px}
+.dsl span{font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.dsl code,code{font-family:var(--mono);font-size:12.5px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:3px 8px;color:var(--primary)}
 .empty{color:var(--muted);background:var(--panel);border:1px dashed var(--line);border-radius:12px;padding:28px;text-align:center}
 .jobs{display:flex;flex-direction:column;gap:8px}
 .job{display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
@@ -182,13 +185,19 @@ def _card(r: RunRecord) -> str:
 </div>"""
 
 
-def dashboard_page(records: list[RunRecord], strategies: list[str], jobs: list | None = None) -> str:
+def dashboard_page(records: list[RunRecord], strategies: list[str], jobs: list | None = None,
+                   llm_available: bool = False) -> str:
     jobs = jobs or []
     survived = sum(1 for r in records if r.survives)
     options = "".join(f'<option value="{_e(s)}">{_e(s)}</option>' for s in strategies)
     default_yaml = _e(DEFAULT_CONFIG_YAML)
     jobs_html = _jobs_section(jobs)
     active = any(getattr(j, "active", False) for j in jobs)
+    nl_option = ('<option value="nl">자연어 아이디어 (LLM)</option>' if llm_available
+                 else '<option value="nl" disabled>자연어 아이디어 (LLM 미설정)</option>')
+    nl_note = ("" if llm_available else
+               '<div class="hint">자연어 입력을 켜려면 <b>ANTHROPIC_API_KEY</b>를 설정하고 '
+               "<code>pip install '.[llm]'</code> 하세요.</div>")
     if records:
         body = f'<div class="grid">{"".join(_card(r) for r in records)}</div>'
     else:
@@ -205,12 +214,19 @@ def dashboard_page(records: list[RunRecord], strategies: list[str], jobs: list |
   <label>데이터
     <select name="source" id="source-select">
       <option value="synthetic">합성 데이터</option>
+      {nl_option}
       <option value="csv">실데이터 (CSV 업로드)</option>
     </select>
   </label>
   <div id="fields-synthetic" class="src-fields">
     <label>전략<select name="strategy">{options}</select></label>
     <label>보유 종목 수<input type="number" name="n_positions" value="20" min="1" max="30"></label>
+  </div>
+  <div id="fields-nl" class="src-fields" style="display:none">
+    <label style="min-width:420px;flex:1">전략 아이디어 (자연어)
+      <textarea name="idea" rows="2" placeholder="예: 최근 5일 하락했지만 거래량이 늘어난 종목을 산다"
+        style="font:14px inherit;width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px 11px"></textarea>
+    </label>
   </div>
   <div id="fields-csv" class="src-fields" style="display:none">
     <label>OHLCV CSV 파일<input type="file" name="csv" accept=".csv"></label>
@@ -225,15 +241,20 @@ def dashboard_page(records: list[RunRecord], strategies: list[str], jobs: list |
 <div class="hint">합성 데이터는 즉시 실행됩니다(네트워크 불필요). CSV는 <b>date, open, high, low, close,
 volume, Name</b> 컬럼의 long-format 파일을 올리면 실데이터로 동일 파이프라인이 돕니다. 실행은
 백그라운드 작업 큐에서 처리되고(오래 걸려도 화면이 멈추지 않음), 실패 포함 자동 기록됩니다.</div>
+{nl_note}
 {jobs_html}
 <h2>최근 실행</h2>
 {body}
 <script>
 (function(){{
   var sel=document.getElementById('source-select');
-  var syn=document.getElementById('fields-synthetic');
-  var csv=document.getElementById('fields-csv');
-  function upd(){{ var c=sel.value==='csv'; syn.style.display=c?'none':''; csv.style.display=c?'':'none'; }}
+  var map={{synthetic:'fields-synthetic', nl:'fields-nl', csv:'fields-csv'}};
+  function upd(){{
+    for (var k in map){{
+      var el=document.getElementById(map[k]);
+      if (el) el.style.display = (sel.value===k) ? '' : 'none';
+    }}
+  }}
   sel.addEventListener('change', upd); upd();
 }})();
 </script>"""
@@ -367,6 +388,7 @@ def run_detail_page(r: RunRecord) -> str:
 <h2 style="margin-top:20px">{_e(r.strategy)}
   <span class="badge {badge[0]}" style="margin-left:8px">{badge[1]}</span></h2>
 <div class="desc">{_e(r.source)} · {scope} · {_e(r.created_at)}</div>
+{f'<div class="dsl"><span>생성된 팩터식</span><code>{_e(r.note)}</code></div>' if r.note else ""}
 <div class="detailmeta">
   <div><div class="k">연복리수익 (CAGR)</div><div class="v">{_pct(r.cagr)}</div></div>
   <div><div class="k">샤프지수</div><div class="v">{r.sharpe:.2f}</div></div>
