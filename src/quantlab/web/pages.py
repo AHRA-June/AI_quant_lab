@@ -89,6 +89,7 @@ tr.dim td{opacity:.45}
 .pbocard .v{font-family:var(--mono);font-size:18px;font-weight:600}
 .banner{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:8px;padding:12px 15px;color:var(--muted2);font-size:13px}
 .foot{color:var(--muted);font-family:var(--mono);font-size:10.5px;margin-top:34px;padding-top:14px;border-top:1px solid var(--line)}
+form.new .fld{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted2)}
 .datefield{position:relative;display:inline-block}
 .datefield .dfin{cursor:pointer;min-width:150px}
 .cal{position:absolute;z-index:60;top:calc(100% + 5px);left:0;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px;box-shadow:0 10px 30px rgba(0,0,0,.30)}
@@ -124,6 +125,12 @@ function qcal(host){
   host.appendChild(hidden); host.appendChild(text); host.appendChild(pop);
   var view=new Date(); view.setDate(1); var sel=null;
   function pad(n){return String(n).padStart(2,'0');}
+  var dd=host.getAttribute('data-default');
+  if(dd!==null && dd!==''){
+    var b=new Date(); b.setHours(0,0,0,0); b.setDate(b.getDate()+parseInt(dd,10));
+    sel=b.getFullYear()+'-'+pad(b.getMonth()+1)+'-'+pad(b.getDate());
+    hidden.value=sel; text.value=sel;
+  }
   function render(){
     var y=view.getFullYear(), m=view.getMonth();
     var start=new Date(y,m,1).getDay(), days=new Date(y,m+1,0).getDate();
@@ -136,12 +143,20 @@ function qcal(host){
       h+='<button type="button" class="cd'+(sel===iso?' sel':'')+'" data-iso="'+iso+'">'+d+'</button>';}
     pop.innerHTML=h+'</div>';
   }
-  function open(){pop.style.display='block'; if(sel) view=new Date(sel+'T00:00:00'), view.setDate(1); render();}
-  text.addEventListener('click',function(){pop.style.display==='none'?open():(pop.style.display='none');});
+  function open(){pop.style.display='block'; if(sel){view=new Date(sel+'T00:00:00'); view.setDate(1);} render();}
+  text.addEventListener('click',function(e){
+    e.preventDefault(); e.stopPropagation();
+    if(pop.style.display==='none') open(); else pop.style.display='none';
+  });
+  // click delegation on the popup. preventDefault/stopPropagation so a wrapping
+  // element (or the document handler) can't swallow the nav/day click.
   pop.addEventListener('click',function(e){
-    var nav=e.target.getAttribute('data-nav');
+    e.preventDefault(); e.stopPropagation();
+    var t=e.target.closest ? e.target.closest('button') : e.target;
+    if(!t) return;
+    var nav=t.getAttribute('data-nav');
     if(nav){view.setMonth(view.getMonth()+parseInt(nav,10)); render(); return;}
-    var iso=e.target.getAttribute('data-iso');
+    var iso=t.getAttribute('data-iso');
     if(iso){sel=iso; hidden.value=iso; text.value=iso; pop.style.display='none';}
   });
   document.addEventListener('click',function(e){if(!host.contains(e.target)) pop.style.display='none';});
@@ -150,9 +165,17 @@ document.querySelectorAll('.datefield').forEach(qcal);
 """
 
 
-def _datefield(name: str) -> str:
-    """Placeholder span the calendar JS upgrades into a day-picker for ``name``."""
-    return f'<span class="datefield" data-name="{_e(name)}"></span>'
+def _datefield(name: str, caption: str, default_days: int | None = None) -> str:
+    """A captioned day-picker field. Deliberately **not** wrapped in a <label>:
+    a <label> forwards clicks to its control, which would swallow the calendar's
+    prev/next and day-cell clicks (popup closes before the click registers).
+
+    ``default_days`` pre-fills the field to ``today + default_days`` (e.g. -365 for
+    "a year ago") so users start from a valid past window instead of empty inputs.
+    """
+    dd = f' data-default="{int(default_days)}"' if default_days is not None else ""
+    return (f'<div class="fld"><span>{_e(caption)}</span>'
+            f'<span class="datefield" data-name="{_e(name)}"{dd}></span></div>')
 
 
 def _e(s: object) -> str:
@@ -298,8 +321,8 @@ def dashboard_page(records: list[RunRecord], strategies: list[str], jobs: list |
   </div>
   <div id="fields-realdata" class="src-fields" style="display:none">
     <div class="frow">
-      <label>시작일{_datefield("start")}</label>
-      <label>종료일{_datefield("end")}</label>
+      {_datefield("start", "시작일", -365)}
+      {_datefield("end", "종료일", 0)}
     </div>
     <div class="frow">
       <label>전략 프리셋
@@ -547,8 +570,8 @@ def screen_page(records: list[RunRecord], *, llm_available: bool, krx_available:
     </select>
   </label>
   <div id="scr-csv" class="src-fields"><label>OHLCV CSV 파일<input type="file" name="csv" accept=".csv"></label></div>
-  <label>시작일{_datefield("start")}</label>
-  <label>종료일{_datefield("end")}</label>
+  {_datefield("start", "시작일", -365)}
+  {_datefield("end", "종료일", 0)}
   {nl_field}
   <label style="min-width:340px;flex:1">직접 조건식 (불리언)
     <textarea name="screen_expr" rows="2" placeholder="예: {_SCREEN_EXAMPLE}"

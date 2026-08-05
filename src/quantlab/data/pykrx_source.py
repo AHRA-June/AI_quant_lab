@@ -61,6 +61,26 @@ def _asof_trading_day(stock, on: date) -> str:
         return d
 
 
+def _asof_candidates(stock, on: date, max_back: int = 7):
+    """Ordered YYYYMMDD strings to try for an *as-of* snapshot: the snapped
+    trading day first, then each of the previous ``max_back`` calendar days.
+
+    Deduplicated, order-preserving. Covers holidays/weekends (via the snap) *and*
+    a just-closed session whose snapshot KRX hasn't published yet (via walk-back).
+    """
+    from datetime import timedelta
+
+    cands = [_asof_trading_day(stock, on)]
+    cands += [to_krx_datestr(on - timedelta(days=k)) for k in range(0, max_back + 1)]
+    seen: set[str] = set()
+    out: list[str] = []
+    for c in cands:
+        if c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+
 class PykrxDataSource(DataSource):
     """Live KRX data via pykrx."""
 
@@ -107,11 +127,25 @@ class PykrxDataSource(DataSource):
 
     def get_market_cap(self, on: date, market: Market) -> pd.DataFrame:
         stock = _require_pykrx()
-        df = stock.get_market_cap(_asof_trading_day(stock, on), market=market.value)
-        if df is None or df.empty:
+        # pykrx's get_market_cap raises a cryptic KeyError on the Korean columns
+        # (['종가','시가총액','거래량','거래대금']) whenever KRX returns nothing for the
+        # date — a holiday, a weekend, or a session whose snapshot isn't published
+        # yet. Snap to the nearest session, then walk back up to a week trying each
+        # candidate so a just-closed/holiday start date still resolves to real data.
+        df = None
+        for cand in _asof_candidates(stock, on):
+            try:
+                got = stock.get_market_cap(cand, market=market.value)
+            except Exception:  # noqa: BLE001 - vendor raises KeyError on empty payloads
+                continue
+            if got is not None and not got.empty:
+                df = got
+                break
+        if df is None:
             raise ValueError(
-                f"KRX에서 {on:%Y-%m-%d} 기준 시가총액 데이터를 받지 못했습니다 "
-                "(휴장일이거나 아직 공개 전인 날짜일 수 있습니다)."
+                f"KRX에서 {on:%Y-%m-%d} 근처의 시가총액 데이터를 받지 못했습니다 "
+                "(휴장일이거나 아직 공개 전인 날짜일 수 있습니다). "
+                "데이터가 확정된 과거 거래일로 시작일을 잡아 보세요."
             )
         # pykrx returns a '시가총액' column indexed by ticker.
         out = pd.DataFrame(index=df.index)
