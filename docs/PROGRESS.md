@@ -121,6 +121,10 @@ KRX 실데이터는 `.[data]` + KRX 네트워크. **둘 다 없어도** 합성/C
   없고**, 데이터 없는(상폐/거래정지) 종목은 **빈 프레임**이 와서 `raw["close"]`가 터짐. `_normalize_ohlcv`가
   이제 **value=close×volume 파생** + **항상 캐노니컬 6컬럼 보장**(빈 응답도 close 컬럼 존재) → 다운스트림
   KeyError 소멸, 데이터 없는 종목은 조용히 스킵. 단위테스트(파생/빈프레임) + `_KRXWithDeadTicker` 통합테스트.
+- [x] (7) 바스켓 실행 `no price data assembled` → 원인: pykrx는 **`adjusted=False`(원주가)=KRX MDCSTAT(죽음)**,
+  **`adjusted=True`(수정주가)=네이버(생존)**. 내 `get_ohlcv`가 원주가로 불러 전 종목 빈 패널 → "no price data".
+  `get_ohlcv`가 원주가 시도 후 **비면 수정주가로 폴백**(백테스트엔 수정주가가 정답, factor→1). 원주가 살아있는
+  환경은 그대로. fake stock으로 폴백/비폴백 테스트.
 
 ## 다음 후보 (아직 안 함)
 - **스크린/KRX 데이터 핀**: screen은 주입 source라 CSV처럼 파일-핀이 아님. 유니버스 패널을

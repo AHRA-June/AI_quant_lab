@@ -14,13 +14,24 @@ class _FakeStock:
     """Minimal stand-in for ``pykrx.stock`` — records the date it was queried with."""
 
     def __init__(self, *, nearest="20250430", cap_by_date=None, has_prev=True,
-                 raise_on_missing=False):
+                 raise_on_missing=False, raw_ohlcv_dead=False):
         self.nearest = nearest
         self.cap_by_date = cap_by_date or {}
         self.has_prev = has_prev
         self.raise_on_missing = raise_on_missing
+        self.raw_ohlcv_dead = raw_ohlcv_dead
         self.asked = None
         self.tried = []
+        self.ohlcv_calls = []
+
+    def get_market_ohlcv(self, fromdate, todate, ticker, adjusted=True, freq="d"):
+        self.ohlcv_calls.append(adjusted)
+        if not adjusted and self.raw_ohlcv_dead:       # KRX MDCSTAT raw feed down
+            return pd.DataFrame()
+        idx = pd.to_datetime(["2025-07-01", "2025-07-02"])
+        return pd.DataFrame(
+            {"시가": [100, 101], "고가": [102, 103], "저가": [99, 100],
+             "종가": [101, 102], "거래량": [10, 20], "등락률": [0.1, 0.2]}, index=idx)
 
     def get_nearest_business_day_in_a_week(self, date=None, prev=True):  # noqa: A002
         if not self.has_prev and prev is not True:
@@ -132,3 +143,21 @@ def test_normalize_ohlcv_empty_frame_keeps_canonical_columns():
     assert list(out.columns) == ["open", "high", "low", "close", "volume", "value"]
     assert len(out) == 0
     assert out["close"].empty          # the property that fixes KeyError: 'close'
+
+
+def test_get_ohlcv_falls_back_to_adjusted_when_raw_endpoint_dead(monkeypatch):
+    # raw (adjusted=False) feed is down; adjusted (Naver) works → must return data.
+    fake = _FakeStock(raw_ohlcv_dead=True)
+    monkeypatch.setattr(pykrx_source, "_require_pykrx", lambda: fake)
+    df = PykrxDataSource().get_ohlcv("005930", date(2025, 6, 1), date(2025, 7, 2))
+    assert not df.empty and "close" in df.columns
+    assert False in fake.ohlcv_calls and True in fake.ohlcv_calls   # tried raw, then adjusted
+
+
+def test_get_ohlcv_uses_raw_when_available(monkeypatch):
+    # when raw works, we use it and do NOT need the adjusted fallback.
+    fake = _FakeStock(raw_ohlcv_dead=False)
+    monkeypatch.setattr(pykrx_source, "_require_pykrx", lambda: fake)
+    df = PykrxDataSource().get_ohlcv("005930", date(2025, 6, 1), date(2025, 7, 2))
+    assert not df.empty
+    assert fake.ohlcv_calls == [False]                 # single raw call, no fallback

@@ -128,10 +128,19 @@ class PykrxDataSource(DataSource):
 
     def get_ohlcv(self, ticker: str, start: date, end: date) -> pd.DataFrame:
         stock = _require_pykrx()
-        df = stock.get_market_ohlcv(
-            to_krx_datestr(start), to_krx_datestr(end), ticker, adjusted=False
-        )
-        return self._normalize_ohlcv(df)
+        fromdate, todate = to_krx_datestr(start), to_krx_datestr(end)
+        df = self._normalize_ohlcv(
+            stock.get_market_ohlcv(fromdate, todate, ticker, adjusted=False))
+        if df.empty:
+            # The raw (adjusted=False) feed is served by KRX's MDCSTAT endpoint,
+            # which is unavailable in some environments, while adjusted prices
+            # (Naver-backed) still work. Fall back to those — adjusted prices are
+            # what the backtest wants anyway, and the factor then collapses to 1.
+            alt = self._normalize_ohlcv(
+                stock.get_market_ohlcv(fromdate, todate, ticker, adjusted=True))
+            if not alt.empty:
+                return alt
+        return df
 
     def get_adjusted_close(self, ticker: str, start: date, end: date) -> pd.Series:
         stock = _require_pykrx()
