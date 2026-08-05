@@ -42,7 +42,7 @@ def test_run_backtest_end_to_end_writes_report(tmp_path):
     assert out["universe_size"] == 20
     assert out["report"].exists()
     html = out["report"].read_text()
-    assert "AI Quant Lab" in html and "Research integrity" in html
+    assert "AI Quant Lab" in html and "연구 무결성 검증" in html
     # backtest produced a finite equity curve and standard metrics
     import numpy as np
     assert np.isfinite(out["equity"].iloc[-1])
