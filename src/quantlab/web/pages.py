@@ -55,8 +55,18 @@ button.go{background:var(--primary);color:#00285d;border:0;border-radius:8px;pad
 .metrics .k{font-size:10px;color:var(--muted)}
 .metrics .v{font-family:var(--mono);font-size:15px;font-weight:600;font-variant-numeric:tabular-nums}
 .metrics .v.neg{color:var(--bad)}
+.card .name a{color:var(--fg);text-decoration:none}
+.card .name a:hover{color:var(--primary);text-decoration:underline}
 .card a.report{align-self:flex-start;color:var(--primary);text-decoration:none;font-size:13px;font-weight:600}
 .card a.report:hover{text-decoration:underline}
+form.inline{display:inline;margin:0}
+button.link{background:none;border:0;color:var(--primary);font:inherit;font-size:12px;cursor:pointer;padding:0;text-decoration:underline}
+button.danger{background:none;border:1px solid color-mix(in srgb,var(--bad) 55%,transparent);color:var(--bad);border-radius:8px;padding:8px 14px;font-weight:600;cursor:pointer;font-size:13px}
+.detailmeta{display:flex;gap:26px;flex-wrap:wrap;margin:14px 0}
+.detailmeta .k{font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.detailmeta .v{font-family:var(--mono);font-size:15px;font-weight:600}
+.actions{display:flex;gap:10px;align-items:center;margin:8px 0 4px}
+iframe.report{width:100%;height:78vh;border:1px solid var(--line);border-radius:12px;background:#fff}
 .empty{color:var(--muted);background:var(--panel);border:1px dashed var(--line);border-radius:12px;padding:28px;text-align:center}
 .jobs{display:flex;flex-direction:column;gap:8px}
 .job{display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
@@ -123,21 +133,26 @@ def _shell(title: str, active: str, inner: str, refresh: int | None = None) -> s
 
 
 _JOB_BADGE = {"queued": ("warn", "대기"), "running": ("warn", "실행 중"),
-              "done": ("pass", "완료"), "failed": ("fail", "실패")}
+              "done": ("pass", "완료"), "failed": ("fail", "실패"),
+              "cancelled": ("fail", "취소됨")}
 
 
 def _jobs_section(jobs: list) -> str:
-    """Active + recently-failed jobs. Done jobs drop off (their run shows below)."""
-    show = [j for j in jobs if j.status in ("queued", "running", "failed")][:8]
+    """Active + recently-terminal (failed/cancelled) jobs. Done jobs drop off."""
+    show = [j for j in jobs if j.status in ("queued", "running", "failed", "cancelled")][:8]
     if not show:
         return ""
     items = ""
     for j in show:
         cls, label = _JOB_BADGE.get(j.status, ("warn", j.status))
         err = f'<div class="joberr">{_e(j.error)}</div>' if j.error else ""
+        cancel = (f'<form method="post" action="/api/jobs/{_e(j.id)}/cancel" class="inline">'
+                  f'<button class="link" type="submit">취소</button></form>'
+                  if j.status == "queued" else "")
         items += (f'<div class="job"><span class="badge {cls}">{label}</span>'
                   f'<span class="jobname">{_e(j.label)}</span>'
-                  f'<span class="jobkind">{_e(j.kind)}</span>{err}</div>')
+                  f'<span class="jobkind">{_e(j.kind)}</span>'
+                  f'<span style="margin-left:auto">{cancel}</span>{err}</div>')
     return f'<h2>실행 중 작업</h2><div class="jobs">{items}</div>'
 
 
@@ -153,7 +168,7 @@ def _card(r: RunRecord) -> str:
 <div class="card">
   <div class="row1">
     <div>
-      <div class="name">{_e(r.strategy)}</div>
+      <div class="name"><a href="/runs/{_e(r.id)}">{_e(r.strategy)}</a></div>
       <div class="when">{_e(r.source)} · 종목 {r.n_positions}개{extra} · {_e(r.created_at)}</div>
     </div>
     <span class="badge {badge[0]}">{badge[1]}</span>
@@ -334,3 +349,39 @@ def audit_page(trials: list[dict], holdout: list[dict]) -> str:
 <h2>홀드아웃 접근 감사</h2>
 {holdout_html}"""
     return _shell("무결성 감사", "audit", inner)
+
+
+# --- run detail ------------------------------------------------------------
+
+
+def run_detail_page(r: RunRecord) -> str:
+    badge = ("pass", "통과") if r.survives else ("fail", "폐기")
+    dd_neg = " neg" if r.max_drawdown < 0 else ""
+    scope = f"유니버스 {r.universe_size} · {_e(r.window)}" if r.universe_size else f"종목 {r.n_positions}개"
+    if r.source == "synthetic":
+        rerun = (f'<form method="post" action="/runs/{_e(r.id)}/rerun" class="inline">'
+                 f'<button class="go" type="submit">재실행</button></form>')
+    else:
+        rerun = '<span class="hint">CSV 재실행은 파일 재업로드가 필요합니다</span>'
+    inner = f"""
+<h2 style="margin-top:20px">{_e(r.strategy)}
+  <span class="badge {badge[0]}" style="margin-left:8px">{badge[1]}</span></h2>
+<div class="desc">{_e(r.source)} · {scope} · {_e(r.created_at)}</div>
+<div class="detailmeta">
+  <div><div class="k">연복리수익 (CAGR)</div><div class="v">{_pct(r.cagr)}</div></div>
+  <div><div class="k">샤프지수</div><div class="v">{r.sharpe:.2f}</div></div>
+  <div><div class="k">최대낙폭</div><div class="v{dd_neg}">{r.max_drawdown:.1%}</div></div>
+  <div><div class="k">셔플 p</div><div class="v">{r.shuffle_p:.3f}</div></div>
+  <div><div class="k">기록된 시도</div><div class="v">{r.trials_logged}</div></div>
+</div>
+<div class="actions">
+  {rerun}
+  <form method="post" action="/runs/{_e(r.id)}/delete" class="inline"
+        onsubmit="return confirm('이 실행을 삭제할까요? 리포트도 함께 삭제됩니다.')">
+    <button class="danger" type="submit">삭제</button>
+  </form>
+  <a class="report" href="/runs/{_e(r.id)}/report" target="_blank" style="margin-left:auto">새 탭에서 리포트 열기 ↗</a>
+</div>
+<h2>리포트</h2>
+<iframe class="report" src="/runs/{_e(r.id)}/report" title="report"></iframe>"""
+    return _shell(r.strategy, "dashboard", inner)

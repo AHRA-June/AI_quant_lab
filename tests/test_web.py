@@ -243,3 +243,58 @@ def test_audit_lists_trials_including_the_run(client):
     assert r.status_code == 200
     assert "시도 로그" in r.text and STRAT in r.text
     assert "홀드아웃" in r.text          # holdout section present (locked banner)
+
+
+# --- run management (detail / delete / rerun / cancel) ---------------------
+
+
+def test_store_delete_removes_record_and_dir(tmp_path):
+    store = RunStore(tmp_path)
+    rec = run_synthetic_backtest(store, strategy=STRAT, n_shuffles=8)
+    assert store.report_path(rec.id) is not None
+    assert store.delete(rec.id) is True
+    assert store.get(rec.id) is None
+    assert not (tmp_path / "runs" / rec.id).exists()
+    assert store.delete("nope") is False          # idempotent on a missing id
+
+
+def test_run_detail_then_delete(client):
+    client.post("/api/runs", json={"strategy": STRAT, "n_positions": 10})
+    rid = _wait_runs(client, 1)[0]["id"]
+
+    detail = client.get(f"/runs/{rid}")
+    assert detail.status_code == 200 and STRAT in detail.text and "리포트" in detail.text
+    assert client.get("/runs/does-not-exist").status_code == 404
+
+    resp = client.post(f"/runs/{rid}/delete", follow_redirects=False)
+    assert resp.status_code == 303
+    assert client.get("/api/runs").json() == []
+    assert client.get(f"/runs/{rid}").status_code == 404
+
+
+def test_rerun_synthetic_enqueues_second_run(client):
+    client.post("/api/runs", json={"strategy": STRAT, "n_positions": 10})
+    rid = _wait_runs(client, 1)[0]["id"]
+    resp = client.post(f"/runs/{rid}/rerun", follow_redirects=False)
+    assert resp.status_code == 303
+    _wait_runs(client, 2)                          # a second run appears
+
+
+def test_jobqueue_cancels_queued_but_not_running():
+    import threading
+    import time
+
+    from quantlab.web.jobs import JobQueue
+
+    q = JobQueue(max_workers=1)
+    gate = threading.Event()
+    a = q.submit("x", "blocker", lambda: (gate.wait(5), None)[1])
+    for _ in range(100):                           # wait until 'a' occupies the worker
+        if q.get(a.id).status == "running":
+            break
+        time.sleep(0.02)
+    b = q.submit("x", "queued", lambda: None)       # stuck behind 'a'
+    assert q.cancel(b.id) is True and q.get(b.id).status == "cancelled"
+    assert q.cancel(a.id) is False                  # running can't be interrupted
+    gate.set()
+    q.shutdown()

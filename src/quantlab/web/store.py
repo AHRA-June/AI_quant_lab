@@ -88,3 +88,22 @@ class RunStore:
             return None
         p = self.base / "runs" / run_id / rec.report_file
         return p if p.exists() else None
+
+    def delete(self, run_id: str) -> bool:
+        """Remove a run from the registry and delete its report directory.
+
+        The run registry is mutable UX state, so rewriting it here is fine — the
+        *trial* log (the integrity-critical, DSR-relevant record) stays append-only
+        and is never touched by this.
+        """
+        import shutil
+
+        if not self.index.exists():
+            return False
+        lines = self.index.read_text(encoding="utf-8").splitlines()
+        kept = [ln for ln in lines if ln.strip() and json.loads(ln).get("id") != run_id]
+        if len(kept) == len(lines):
+            return False
+        self.index.write_text(("\n".join(kept) + "\n") if kept else "", encoding="utf-8")
+        shutil.rmtree(self.base / "runs" / run_id, ignore_errors=True)
+        return True

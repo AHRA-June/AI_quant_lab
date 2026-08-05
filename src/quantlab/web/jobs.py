@@ -49,6 +49,7 @@ class JobQueue:
     def __init__(self, max_workers: int = 2) -> None:
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="ql-job")
         self._jobs: "dict[str, Job]" = {}
+        self._futures: "dict[str, object]" = {}
         self._lock = threading.Lock()
         self._ids = itertools.count(1)
 
@@ -58,8 +59,20 @@ class JobQueue:
             job = Job(id=f"job-{next(self._ids):04d}", kind=kind, label=label,
                       status="queued", created_at=_now_iso())
             self._jobs[job.id] = job
-        self._pool.submit(self._run, job, target)
+        self._futures[job.id] = self._pool.submit(self._run, job, target)
         return job
+
+    def cancel(self, job_id: str) -> bool:
+        """Cancel a job that has not started yet. Running jobs can't be interrupted."""
+        fut = self._futures.get(job_id)
+        if fut is None or not fut.cancel():     # cancel() is False once running/done
+            return False
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is not None:
+                job.status = "cancelled"
+                job.finished_at = _now_iso()
+        return True
 
     def _run(self, job: Job, target: Callable[[], Optional[str]]) -> None:
         with self._lock:

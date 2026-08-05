@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 from quantlab.web.jobs import JobQueue
-from quantlab.web.pages import audit_page, compare_page, dashboard_page
+from quantlab.web.pages import audit_page, compare_page, dashboard_page, run_detail_page
 from quantlab.web.service import (
     available_strategies,
     compare_report_path,
@@ -134,12 +134,46 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
 
         return RedirectResponse(url="/", status_code=303)
 
+    @app.get("/runs/{run_id}", response_class=HTMLResponse)
+    def run_detail(run_id: str):
+        rec = store.get(run_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        return HTMLResponse(run_detail_page(rec))
+
     @app.get("/runs/{run_id}/report", response_class=HTMLResponse)
     def run_report(run_id: str):
         path = store.report_path(run_id)
         if path is None:
             raise HTTPException(status_code=404, detail="report not found")
         return FileResponse(path, media_type="text/html")
+
+    @app.post("/runs/{run_id}/delete")
+    def delete_run(run_id: str):
+        store.delete(run_id)
+        return RedirectResponse(url="/", status_code=303)
+
+    @app.post("/runs/{run_id}/rerun")
+    def rerun_run(run_id: str):
+        rec = store.get(run_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        if rec.source != "synthetic":
+            raise HTTPException(status_code=422, detail="only synthetic runs can be re-run in place")
+        strat, n_pos = rec.strategy, rec.n_positions
+        queue.submit(
+            "synthetic", strat,
+            lambda: run_synthetic_backtest(
+                store, strategy=strat, n_positions=n_pos, n_shuffles=n_shuffles).id,
+        )
+        return RedirectResponse(url="/", status_code=303)
+
+    @app.post("/api/jobs/{job_id}/cancel")
+    def cancel_job(job_id: str, request: Request):
+        ok = queue.cancel(job_id)
+        if "application/json" in request.headers.get("content-type", ""):
+            return JSONResponse({"cancelled": ok})
+        return RedirectResponse(url="/", status_code=303)
 
     # --- compare (multiple-testing PBO) ------------------------------------
 
