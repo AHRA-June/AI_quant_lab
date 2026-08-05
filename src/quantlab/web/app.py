@@ -312,6 +312,28 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
             raise HTTPException(status_code=404, detail="screen not found")
         return HTMLResponse(screen_result_page(rec, snap))
 
+    @app.get("/screen/{run_id}/matches.csv")
+    def screen_matches_csv(run_id: str):
+        import csv
+        import io
+
+        from fastapi.responses import Response
+
+        snap = read_screen(store, run_id)
+        if snap is None:
+            raise HTTPException(status_code=404, detail="screen not found")
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["ticker", "name", "close", "ref_date", "expr"])
+        for m in snap.get("matches", []):
+            w.writerow([m.get("ticker", ""), m.get("name", ""), m.get("close", ""),
+                        snap.get("ref_date", ""), snap.get("expr", "")])
+        return Response(
+            content="﻿" + buf.getvalue(),          # BOM so Excel reads UTF-8 (Korean) right
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="matches_{run_id}.csv"'},
+        )
+
     # --- integrity audit ---------------------------------------------------
 
     @app.get("/audit", response_class=HTMLResponse)

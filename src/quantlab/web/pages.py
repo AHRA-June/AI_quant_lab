@@ -476,6 +476,7 @@ def screen_result_page(r: RunRecord, snap: dict) -> str:
 </div>
 <div class="actions">
   <a class="report" href="/runs/{_e(r.id)}/report" target="_blank">이 종목들 담았을 때 성과 리포트 ↗</a>
+  <a class="report" href="/screen/{_e(r.id)}/matches.csv">종목 리스트 CSV 내려받기 ↓</a>
   <form method="post" action="/runs/{_e(r.id)}/delete" class="inline" style="margin-left:auto"
         onsubmit="return confirm('삭제할까요?')"><button class="danger" type="submit">삭제</button></form>
 </div>
