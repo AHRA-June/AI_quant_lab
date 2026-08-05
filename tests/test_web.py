@@ -338,6 +338,23 @@ def test_screen_endpoint_direct_expr_no_llm(client, tmp_path):
     assert res.status_code == 200 and "매칭 종목" in res.text
 
 
+def test_screen_matches_csv_export(client, tmp_path):
+    csv_file = _write_long_csv(tmp_path / "s.csv")
+    with csv_file.open("rb") as fh:
+        client.post(
+            "/api/screen",
+            data={"source": "csv", "start": "2022-06-01", "end": "2023-06-01",
+                  "screen_expr": "close > ts_mean(close, 20)", "config_yaml": _CSV_CFG},
+            files={"csv": ("s.csv", fh, "text/csv")}, follow_redirects=False,
+        )
+    rid = _wait_runs(client, 1)[0]["id"]
+    resp = client.get(f"/screen/{rid}/matches.csv")
+    assert resp.status_code == 200
+    assert "text/csv" in resp.headers["content-type"]
+    assert "attachment" in resp.headers["content-disposition"]
+    assert "ticker,name,close" in resp.text            # header row present
+
+
 def test_screen_requires_a_condition(client):
     resp = client.post(
         "/api/screen",
