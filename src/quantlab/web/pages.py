@@ -516,6 +516,12 @@ def _repro_section(r: RunRecord, bundle: dict | None) -> str:
                   f'<button class="go" type="submit">재현 검증</button></form>')
     else:
         verify = f'<span class="hint">{_e(reason)}</span>' if reason else ""
+    inp = bundle.get("inputs", {}) or {}
+    pin = ""
+    if inp.get("data_sha256"):
+        pin = (f'<div class="desc">데이터 핀: <code>{_e(str(inp.get("data_name","")))}</code> '
+               f'· sha256 <code>{_e(str(inp["data_sha256"])[:16])}</code> '
+               f'(이 파일 그대로 오프라인 재현)</div>')
     return f"""
 <h2>재현성 번들</h2>
 <div class="desc">실행에 필요한 입력·시드·버전과 결과 <b>지문</b>을 함께 저장합니다. {rbadge}</div>
@@ -524,6 +530,7 @@ def _repro_section(r: RunRecord, bundle: dict | None) -> str:
   <div><div class="k">종류</div><div class="v">{_e(str(bundle.get("kind","")))}</div></div>
   <div><div class="k">생성 시각</div><div class="v">{_e(str(bundle.get("created_at","")))}</div></div>
 </div>
+{pin}
 {f'<div class="desc">{verline}</div>' if verline else ""}
 <div class="desc">검증: {vline}</div>
 <div class="actions">

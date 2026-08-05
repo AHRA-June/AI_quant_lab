@@ -510,10 +510,10 @@ def test_reproduce_run_matches_and_stamps_verdict(tmp_path):
     assert read_bundle(store, rec.id)["verification"]["matches"] is True
 
 
-def test_reproduce_external_data_run_is_rejected(tmp_path):
+def test_csv_run_pins_data_and_is_reproducible(tmp_path):
     from datetime import date
 
-    from quantlab.web.repro import reproduce_run
+    from quantlab.web.repro import PIN_DIR, read_bundle, reproduce_run
 
     store = RunStore(tmp_path)
     csv = _write_long_csv(tmp_path / "prices.csv")
@@ -521,6 +521,46 @@ def test_reproduce_external_data_run_is_rejected(tmp_path):
         store, csv_path=csv, config_yaml=_CSV_CFG,
         start=date(2022, 6, 1), end=date(2023, 6, 1), n_shuffles=8,
     )
+    b = read_bundle(store, rec.id)
+    assert b["kind"] == "csv" and b["reproducible"] is True
+    assert b["inputs"]["data_sha256"] and b["inputs"]["config_yaml"] == _CSV_CFG
+    # the source CSV is copied into the run so re-runs need no external file
+    pinned = store.base / "runs" / rec.id / PIN_DIR / "prices.csv"
+    assert pinned.exists()
+    # re-running from the pinned copy reproduces the exact fingerprint
+    v = reproduce_run(store, rec.id)
+    assert v["matches"] is True
+    assert read_bundle(store, rec.id)["verification"]["matches"] is True
+
+
+def test_reproduce_detects_tampered_pinned_data(tmp_path):
+    from datetime import date
+
+    from quantlab.web.repro import PIN_DIR, reproduce_run
+
+    store = RunStore(tmp_path)
+    csv = _write_long_csv(tmp_path / "prices.csv")
+    rec = run_csv_backtest(
+        store, csv_path=csv, config_yaml=_CSV_CFG,
+        start=date(2022, 6, 1), end=date(2023, 6, 1), n_shuffles=8,
+    )
+    pinned = store.base / "runs" / rec.id / PIN_DIR / "prices.csv"
+    pinned.write_text(pinned.read_text(encoding="utf-8") + "\n# tampered\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="해시 불일치"):
+        reproduce_run(store, rec.id)
+
+
+def test_reproduce_non_reproducible_bundle_is_rejected(tmp_path):
+    import json
+
+    from quantlab.web.repro import reproduce_run
+
+    store = RunStore(tmp_path)
+    rec = run_synthetic_backtest(store, strategy=STRAT, n_positions=15, n_shuffles=8)
+    bp = store.base / "runs" / rec.id / "bundle.json"
+    b = json.loads(bp.read_text(encoding="utf-8"))
+    b["reproducible"] = False   # e.g. an external-data (nl/krx/screen) run
+    bp.write_text(json.dumps(b), encoding="utf-8")
     with pytest.raises(ValueError):
         reproduce_run(store, rec.id)
 
