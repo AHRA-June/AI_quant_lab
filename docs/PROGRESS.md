@@ -56,6 +56,11 @@ KRX 실데이터는 `.[data]` + KRX 네트워크. **둘 다 없어도** 합성/C
     `config_yaml`·window·ticker_col을 번들에 저장 → **CSV도 오프라인 자동 재현**(`reproducible=True`).
     `pin_file`, `file_sha256`, `_reproduce_csv`(핀 해시 검증 후 임시 dir에 동일 실데이터 경로 재실행).
     핀 파일 변조 시 해시 불일치로 거부. 상세 화면에 "데이터 핀: 파일·해시" 표시. **네트워크 0**.
+11. **KRX 휴장일 버그 수정** — pykrx `get_market_cap`/`get_market_ticker_list`는 휴장일(예:
+    근로자의 날 05-01) 조회 시 빈 프레임 후 `KeyError: ['종가','시가총액','거래량','거래대금']`로
+    죽는다. `_asof_trading_day`로 유니버스 기준일을 **가장 가까운 직전 거래일로 스냅**
+    (`get_nearest_business_day_in_a_week`, PIT 안전하게 prev). 빈 응답이면 한글 에러로 명확히.
+    `tests/test_pykrx_source.py`(fake stock 주입, network-free)로 스냅·에러·티커 경로 검증.
 
 ## 아키텍처 (`src/quantlab/web/`)
 - `store.py` — RunRecord(+universe_size/window/note), RunStore(append/list/get/delete, report_path).

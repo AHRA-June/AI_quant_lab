@@ -37,16 +37,40 @@ def _require_pykrx():
     return stock
 
 
+def _asof_trading_day(stock, on: date) -> str:
+    """Snap an *as-of* date to the nearest **trading** day.
+
+    KRX is closed on weekends and holidays (e.g. 2025-05-01 근로자의 날). pykrx's
+    snapshot calls (``get_market_cap``/``get_market_ticker_list``) return an empty
+    frame for a closed day and then raise a cryptic ``KeyError`` on the Korean
+    columns. Resolving to the nearest prior session first makes point-in-time
+    universe building robust to holidays.
+    """
+    d = to_krx_datestr(on)
+    fn = getattr(stock, "get_nearest_business_day_in_a_week", None)
+    if fn is None:  # pragma: no cover - depends on pykrx version
+        return d
+    try:
+        return fn(date=d, prev=True)          # snap backward (point-in-time safe)
+    except TypeError:                          # older pykrx: no ``prev`` kwarg
+        try:
+            return fn(d)
+        except Exception:                      # noqa: BLE001 - vendor call, tolerate
+            return d
+    except Exception:                          # noqa: BLE001
+        return d
+
+
 class PykrxDataSource(DataSource):
     """Live KRX data via pykrx."""
 
     def get_ticker_list(self, on: date, market: Market) -> list[str]:
         stock = _require_pykrx()
-        return list(stock.get_market_ticker_list(to_krx_datestr(on), market=market.value))
+        return list(stock.get_market_ticker_list(_asof_trading_day(stock, on), market=market.value))
 
     def get_etf_etn_ticker_list(self, on: date) -> list[str]:
         stock = _require_pykrx()
-        d = to_krx_datestr(on)
+        d = _asof_trading_day(stock, on)
         tickers: list[str] = []
         for fn in ("get_etf_ticker_list", "get_etn_ticker_list"):
             getter = getattr(stock, fn, None)
@@ -83,7 +107,12 @@ class PykrxDataSource(DataSource):
 
     def get_market_cap(self, on: date, market: Market) -> pd.DataFrame:
         stock = _require_pykrx()
-        df = stock.get_market_cap(to_krx_datestr(on), market=market.value)
+        df = stock.get_market_cap(_asof_trading_day(stock, on), market=market.value)
+        if df is None or df.empty:
+            raise ValueError(
+                f"KRX에서 {on:%Y-%m-%d} 기준 시가총액 데이터를 받지 못했습니다 "
+                "(휴장일이거나 아직 공개 전인 날짜일 수 있습니다)."
+            )
         # pykrx returns a '시가총액' column indexed by ticker.
         out = pd.DataFrame(index=df.index)
         out.index.name = "ticker"
