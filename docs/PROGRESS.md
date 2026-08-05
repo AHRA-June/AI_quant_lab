@@ -66,6 +66,9 @@ KRX 실데이터는 `.[data]` + KRX 네트워크. **둘 다 없어도** 합성/C
     전략 프리셋 5종(모멘텀+거래량/모멘텀/단기반전/저변동성/거래대금급증) + 시장·상위시총·종목수·리밸런스
     드롭다운 → JS가 config YAML 자동 조립. 원시 YAML은 "고급" `<details>`로 강등. 백엔드 계약 불변
     (여전히 `config_yaml` 텍스트 제출). 프리셋 alpha 전부 `compile_alpha`/`StrategyConfig` 검증 테스트.
+13. **캘린더/KRX 견고화** — (a) 캘린더가 `<label>` 클릭가로채기로 안 되던 것 수정(라벨 제거+핸들러
+    강화+기본날짜). (b) KRX 시가총액 조회를 `_asof_candidates`(스냅+7일 walk-back, vendor KeyError
+    포획)로 감싸 휴장/미공개일에도 데이터 있는 날을 찾음. `tests/test_pykrx_source.py`에 walk-back 케이스.
 
 ## 아키텍처 (`src/quantlab/web/`)
 - `store.py` — RunRecord(+universe_size/window/note), RunStore(append/list/get/delete, report_path).
@@ -93,6 +96,12 @@ KRX 실데이터는 `.[data]` + KRX 네트워크. **둘 다 없어도** 합성/C
   `.datefield`/`.cal`)로 교체. `<input type=date>` 제거, 숨은 input에 `YYYY-MM-DD` 기록. 대시보드+종목찾기 둘 다.
 - [x] (2) DSL YAML 수기 입력 무리 → **프리셋 5종 + 친화 폼**(시장/상위시총/종목수/리밸런스)이 YAML을
   자동 생성. YAML은 `<details>` 고급 옵션으로 강등(직접 편집도 가능). 프리셋 alpha 전부 컴파일 검증.
+- [x] (3) 달력 여전히 에러(전월 이동·일자 선택 불가) → 원인: `_datefield`가 `<label>` 안에 있어
+  label이 클릭을 연결된 컨트롤로 가로채 팝업이 즉시 닫힘. **label 래핑 제거**(`.fld` div + 캡션 span),
+  핸들러에 `preventDefault`/`stopPropagation` + `closest('button')`. 기본 날짜 자동 채움(시작 -365, 종료 0).
+- [x] (4) KRX 백테스트 에러(휴장/최근일 KeyError) → pykrx `get_market_cap`가 데이터 없는 날에
+  내부에서 KeyError. `_asof_candidates`로 **스냅 후 최대 7일 뒤로 물러나며** 데이터 있는 날 탐색,
+  vendor 예외를 잡고 최종 실패 시 한글 에러. `get_nearest_business_day_in_a_week`는 **네트워크 호출**임에 유의.
 
 ## 다음 후보 (아직 안 함)
 - **스크린/KRX 데이터 핀**: screen은 주입 source라 CSV처럼 파일-핀이 아님. 유니버스 패널을

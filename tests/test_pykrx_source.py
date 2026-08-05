@@ -13,11 +13,14 @@ from quantlab.types import Market
 class _FakeStock:
     """Minimal stand-in for ``pykrx.stock`` — records the date it was queried with."""
 
-    def __init__(self, *, nearest="20250430", cap_by_date=None, has_prev=True):
+    def __init__(self, *, nearest="20250430", cap_by_date=None, has_prev=True,
+                 raise_on_missing=False):
         self.nearest = nearest
         self.cap_by_date = cap_by_date or {}
         self.has_prev = has_prev
+        self.raise_on_missing = raise_on_missing
         self.asked = None
+        self.tried = []
 
     def get_nearest_business_day_in_a_week(self, date=None, prev=True):  # noqa: A002
         if not self.has_prev and prev is not True:
@@ -26,7 +29,12 @@ class _FakeStock:
 
     def get_market_cap(self, d, market=None):
         self.asked = d
-        return self.cap_by_date.get(d, pd.DataFrame())
+        self.tried.append(d)
+        if d in self.cap_by_date:
+            return self.cap_by_date[d]
+        if self.raise_on_missing:                       # mimic pykrx's internal KeyError
+            raise KeyError("None of Index(['종가','시가총액','거래량','거래대금'])")
+        return pd.DataFrame()
 
     def get_market_ticker_list(self, d, market=None):
         self.asked = d
@@ -61,6 +69,18 @@ def test_get_market_cap_raises_clear_error_on_empty(monkeypatch):
     monkeypatch.setattr(pykrx_source, "_require_pykrx", lambda: fake)
     with pytest.raises(ValueError, match="시가총액 데이터를 받지 못했습니다"):
         PykrxDataSource().get_market_cap(date(2025, 5, 1), Market.KOSPI)
+
+
+def test_get_market_cap_walks_back_past_keyerror_to_a_day_with_data(monkeypatch):
+    # nearest-helper points at the holiday (no data → pykrx raises KeyError);
+    # a session a few days earlier does have data. The source must walk back to it.
+    cap = pd.DataFrame({"시가총액": [1e14]}, index=["005930"])
+    fake = _FakeStock(nearest="20260501", cap_by_date={"20260428": cap},
+                      raise_on_missing=True)
+    monkeypatch.setattr(pykrx_source, "_require_pykrx", lambda: fake)
+    out = PykrxDataSource().get_market_cap(date(2026, 5, 1), Market.KOSPI)
+    assert out.loc["005930", "mktcap"] == 1e14
+    assert "20260501" in fake.tried and fake.tried[-1] == "20260428"
 
 
 def test_get_ticker_list_uses_snapped_date(monkeypatch):
