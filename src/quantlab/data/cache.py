@@ -18,10 +18,13 @@ the building block of the experiment reproducibility bundle
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import date
 from pathlib import Path
 
 import pandas as pd
+
+from quantlab.types import as_date
 
 from quantlab.data.adjust import apply_adjustment, derive_factor
 from quantlab.data.source import DataSource
@@ -43,14 +46,19 @@ class OHLCVCache:
         self.root = Path(cache_dir)
         self._ohlcv = self.root / "ohlcv"
         self._factor = self.root / "factor"
+        self._meta = self.root / "meta"
         self._ohlcv.mkdir(parents=True, exist_ok=True)
         self._factor.mkdir(parents=True, exist_ok=True)
+        self._meta.mkdir(parents=True, exist_ok=True)
 
     def _ohlcv_path(self, ticker: str) -> Path:
         return self._ohlcv / f"{ticker}.parquet"
 
     def _factor_path(self, ticker: str) -> Path:
         return self._factor / f"{ticker}.parquet"
+
+    def _meta_path(self, ticker: str) -> Path:
+        return self._meta / f"{ticker}.json"
 
     def has_raw(self, ticker: str) -> bool:
         return self._ohlcv_path(ticker).exists()
@@ -67,6 +75,24 @@ class OHLCVCache:
     def get_factor(self, ticker: str) -> pd.Series:
         return pd.read_parquet(self._factor_path(ticker))["factor"]
 
+    # --- coverage tracking -------------------------------------------------
+    # Coverage records the [start, end] *requested* range a ticker's cache was
+    # filled over — not the range of data that came back. Keying off the request
+    # keeps a late-listed ticker (whose data starts after ``start``) from being
+    # refetched forever, while still letting a wider later request grow the cache.
+    def covered(self, ticker: str) -> tuple[date, date] | None:
+        path = self._meta_path(ticker)
+        if not path.exists():
+            return None
+        meta = json.loads(path.read_text(encoding="utf-8"))
+        return as_date(meta["start"]), as_date(meta["end"])
+
+    def set_covered(self, ticker: str, start: date, end: date) -> None:
+        self._meta_path(ticker).write_text(
+            json.dumps({"start": as_date(start).isoformat(), "end": as_date(end).isoformat()}),
+            encoding="utf-8",
+        )
+
 
 class PriceStore:
     """Read-through price access: source → cache → adjusted reads."""
@@ -76,13 +102,20 @@ class PriceStore:
         self.cache = cache
 
     def _ensure_cached(self, ticker: str, start: date, end: date) -> None:
-        if self.cache.has_raw(ticker):
-            return
+        start, end = as_date(start), as_date(end)
+        covered = self.cache.covered(ticker) if self.cache.has_raw(ticker) else None
+        if covered is not None:
+            cov_start, cov_end = covered
+            if cov_start <= start and cov_end >= end:
+                return  # request already inside cached coverage
+            # widen to the union so a later, larger window never truncates the cache
+            start, end = min(start, cov_start), max(end, cov_end)
         raw = self.source.get_ohlcv(ticker, start, end)
         adj_close = self.source.get_adjusted_close(ticker, start, end)
         factor = derive_factor(raw["close"], adj_close)
         self.cache.put_raw(ticker, raw)
         self.cache.put_factor(ticker, factor)
+        self.cache.set_covered(ticker, start, end)
 
     def get_raw(self, ticker: str, start: date, end: date) -> pd.DataFrame:
         self._ensure_cached(ticker, start, end)

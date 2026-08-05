@@ -123,3 +123,20 @@ def test_strategy_weights_long_only_and_rebalanced(ctx):
     assert (held.fillna(0).values >= -1e-12).all()
     # weekly rebalance => far fewer signal rows than trading days
     assert len(held) < len(ctx["close"]) / 3
+
+
+@pytest.mark.parametrize(
+    "freq, min_rows, max_rows",
+    [("daily", 60, 60), ("weekly", 10, 14), ("monthly", 3, 3)],
+)
+def test_apply_rebalance_frequencies(ctx, freq, min_rows, max_rows):
+    # Regression: monthly used the resample alias "ME", which to_period rejects.
+    from quantlab.factors.portfolio import apply_rebalance, top_n_long_only
+
+    weights = top_n_long_only(compile_alpha("rank(returns(close, 5))")(ctx), 2)
+    masked = apply_rebalance(weights, freq)
+    reb_rows = masked.dropna(how="all")
+    assert min_rows <= len(reb_rows) <= max_rows
+    # rebalance dates are the last trading day of each period
+    if freq != "daily":
+        assert masked.index[-1] in reb_rows.index

@@ -71,9 +71,9 @@ def _inputs(**kw):
 def test_report_contains_sections_and_values():
     html = build_report(_inputs(trials=7))
     assert "AI Quant Lab — test_strategy" in html
-    assert "Research integrity" in html and "Equity vs benchmark" in html
+    assert "연구 무결성 검증" in html and "누적 수익 곡선" in html
     assert "+18.0%" in html  # CAGR rendered
-    assert "Trials logged" in html and ">7<" in html
+    assert "기록된 시도 횟수" in html and ">7<" in html
     assert html.count("<polyline") >= 2  # strategy + benchmark
 
 
@@ -81,13 +81,13 @@ def test_report_flags_failed_integrity():
     shuf = ShuffleResult(observed=0.0, p_value=0.4, null_mean=0.0, null_std=0.01, n_shuffles=50)
     pbo = PBOResult(pbo=0.7, logits=np.array([-1.0, -0.5]), n_combinations=2)
     html = build_report(_inputs(shuffle=shuf, pbo=pbo, dsr=0.6))
-    assert "DISCARD" in html and "OVERFIT" in html and "WEAK" in html
-    assert "badge fail" in html
+    assert "폐기" in html and "과최적화" in html and "미약" in html
+    assert "badge fail" in html and "badge warn" in html
 
 
 def test_report_marks_benchmark_beat():
     html = build_report(_inputs())  # strategy drift 0.001 > benchmark 0.0002
-    assert "BEATS" in html
+    assert "우위" in html
 
 
 def test_write_report_creates_file(tmp_path):
