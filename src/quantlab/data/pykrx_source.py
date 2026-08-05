@@ -61,6 +61,22 @@ def _asof_trading_day(stock, on: date) -> str:
         return d
 
 
+def _is_network_error(exc: BaseException) -> bool:
+    """True if ``exc`` (or something in its cause chain) is a connectivity failure
+    — a dead network/proxy/TLS/timeout, not a "KRX has no data for this date"."""
+    seen = 0
+    e: BaseException | None = exc
+    while e is not None and seen < 8:
+        mod = (type(e).__module__ or "").lower()
+        name = type(e).__name__.lower()
+        if ("requests" in mod or "urllib3" in mod or "socket" in mod
+                or any(k in name for k in ("connection", "proxy", "timeout", "ssl"))):
+            return True
+        e = e.__cause__ or e.__context__
+        seen += 1
+    return False
+
+
 def _asof_candidates(stock, on: date, max_back: int = 7):
     """Ordered YYYYMMDD strings to try for an *as-of* snapshot: the snapped
     trading day first, then each of the previous ``max_back`` calendar days.
@@ -133,19 +149,31 @@ class PykrxDataSource(DataSource):
         # yet. Snap to the nearest session, then walk back up to a week trying each
         # candidate so a just-closed/holiday start date still resolves to real data.
         df = None
+        last_exc: Exception | None = None
         for cand in _asof_candidates(stock, on):
             try:
                 got = stock.get_market_cap(cand, market=market.value)
-            except Exception:  # noqa: BLE001 - vendor raises KeyError on empty payloads
+            except Exception as exc:  # noqa: BLE001 - vendor raises KeyError on empty payloads
+                last_exc = exc
+                # A dead network/proxy won't heal across candidates — surface it now
+                # with a distinct message instead of hammering KRX and then blaming
+                # the date.
+                if _is_network_error(exc):
+                    raise ValueError(
+                        "KRX 서버에 접속하지 못했습니다 — 네트워크·프록시·방화벽·백신을 "
+                        f"확인하세요. [{type(exc).__name__}]"
+                    ) from exc
                 continue
             if got is not None and not got.empty:
                 df = got
                 break
         if df is None:
+            hint = (f" [pykrx 마지막 오류: {type(last_exc).__name__}]" if last_exc else "")
             raise ValueError(
                 f"KRX에서 {on:%Y-%m-%d} 근처의 시가총액 데이터를 받지 못했습니다 "
-                "(휴장일이거나 아직 공개 전인 날짜일 수 있습니다). "
-                "데이터가 확정된 과거 거래일로 시작일을 잡아 보세요."
+                "(휴장일이거나 아직 공개 전인 날짜일 수 있습니다). pykrx를 최신으로 업데이트"
+                "(pip install -U pykrx)하거나, 데이터가 확정된 과거 거래일로 시작일을 잡아 보세요."
+                f"{hint}"
             )
         # pykrx returns a '시가총액' column indexed by ticker.
         out = pd.DataFrame(index=df.index)
