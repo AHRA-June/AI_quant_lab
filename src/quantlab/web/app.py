@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 from quantlab.web.jobs import JobQueue
+from quantlab.web.repro import read_bundle, reproduce_run
 from quantlab.web.pages import (
     DEFAULT_CONFIG_YAML,
     audit_page,
@@ -191,7 +192,23 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
         rec = store.get(run_id)
         if rec is None:
             raise HTTPException(status_code=404, detail="run not found")
-        return HTMLResponse(run_detail_page(rec))
+        return HTMLResponse(run_detail_page(rec, read_bundle(store, run_id)))
+
+    @app.get("/runs/{run_id}/bundle.json", response_class=JSONResponse)
+    def run_bundle(run_id: str):
+        bundle = read_bundle(store, run_id)
+        if bundle is None:
+            raise HTTPException(status_code=404, detail="bundle not found")
+        return JSONResponse(bundle, headers={
+            "Content-Disposition": f'attachment; filename="bundle_{run_id}.json"'})
+
+    @app.post("/runs/{run_id}/reproduce")
+    def reproduce(run_id: str):
+        try:
+            reproduce_run(store, run_id)              # re-runs + stamps the verdict
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
 
     @app.get("/runs/{run_id}/report", response_class=HTMLResponse)
     def run_report(run_id: str):

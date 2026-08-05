@@ -23,6 +23,7 @@ from quantlab.demo import (
     write_strategy_report,
 )
 from quantlab.factors.portfolio import top_n_long_only
+from quantlab.web.repro import write_bundle
 from quantlab.web.store import RunRecord, RunStore, _now_iso
 
 
@@ -151,6 +152,10 @@ def run_screen(
         "expr": screen_expr, "criteria": criteria or "", "ref_date": f"{ref_ts:%Y-%m-%d}",
         "universe_size": len(tickers), "data_label": data_label, "matches": matches,
     }, ensure_ascii=False), encoding="utf-8")
+    write_bundle(run_dir, kind="screen", reproducible=False, out=out,
+                 reason="외부 데이터 의존 — 조건식은 저장됨, 데이터 고정 시 수동 재현 가능.",
+                 inputs={"expr": screen_expr, "window": f"{start:%Y-%m-%d}→{end:%Y-%m-%d}",
+                         "n_shuffles": n_shuffles})
 
     record = _record_from_out(
         out, id=run_id, created_at=created,
@@ -205,6 +210,10 @@ def run_krx_backtest(
         n_shuffles=n_shuffles, data_label="KRX 실데이터 (일봉)",
         trials_path=store.base / "trials.jsonl", client=client,
     )
+    write_bundle(run_dir, kind="krx", reproducible=False, out=out,
+                 reason="KRX 벤더 데이터 핀 필요 (조정/정정으로 값이 바뀔 수 있음).",
+                 inputs={"config_hash": label, "window": f"{start:%Y-%m-%d}→{end:%Y-%m-%d}",
+                         "n_shuffles": n_shuffles})
     record = _record_from_out(
         out, id=run_id, created_at=created, strategy=f"krx:{label[:8]}", source="krx",
         n_positions=int(getattr(config.portfolio, "n_positions", 0)),
@@ -244,6 +253,9 @@ def run_synthetic_backtest(
         subtitle=f"{strategy} · 합성 데이터 · 종목 {n_positions}개",
         client=client,
     )
+    write_bundle(run_dir, kind="synthetic", reproducible=True, out=out,
+                 inputs={"strategy": strategy, "n_positions": n_positions,
+                         "n_shuffles": n_shuffles})
 
     record = _record_from_out(
         out, id=run_id, created_at=created, strategy=strategy, source="synthetic",
@@ -293,6 +305,9 @@ def run_nl_backtest(
     write_strategy_report(
         out, close, run_dir, subtitle=f"자연어: {label} · 합성 데이터", client=client,
     )
+    write_bundle(run_dir, kind="nl", reproducible=False, out=out,
+                 reason="LLM 생성 — 조건식은 저장됨. 합성 데이터라 조건 고정 시 수동 재현 가능.",
+                 inputs={"idea": idea, "alpha": config.alpha, "n_shuffles": n_shuffles})
     record = _record_from_out(
         out, id=run_id, created_at=created, strategy=label, source="nl",
         n_positions=int(getattr(config.portfolio, "n_positions", 0)),
@@ -340,6 +355,10 @@ def run_csv_backtest(
         trials_path=store.base / "trials.jsonl",   # one shared log → complete trial count
         client=client,
     )
+    write_bundle(run_dir, kind="csv", reproducible=False, out=out,
+                 reason="CSV 데이터 핀 필요 (같은 파일이어야 재현).",
+                 inputs={"config_hash": label, "window": f"{start:%Y-%m-%d}→{end:%Y-%m-%d}",
+                         "n_shuffles": n_shuffles})
     record = _record_from_out(
         out, id=run_id, created_at=created, strategy=f"csv:{label[:8]}", source="csv",
         n_positions=int(getattr(config.portfolio, "n_positions", 0)),

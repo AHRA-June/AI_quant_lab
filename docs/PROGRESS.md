@@ -46,6 +46,12 @@ KRX 실데이터는 `.[data]` + KRX 네트워크. **둘 다 없어도** 합성/C
 8. **종목 찾기(스크리너)** — `dsl/screen.py` 불리언 필터 컴파일러(`> < >= <=`, and/or/not,
    화이트리스트), `ScreenGenerator` NL→조건식, `run_screen`(유니버스→panels→mask→기준일
    매칭 리스트 + 그 종목 동일가중 백테스트), `/screen` 탭. **직접 조건식은 키 없이 무료**.
+9. **재현성 번들** — `web/repro.py`. 실행마다 `bundle.json` 저장(입력·시드·버전 + 결과 **지문**
+   = 헤드라인 지표 sha256 16자리). 합성 실행은 시드 고정 → **자동 재현 대상**(`reproducible=True`),
+   csv/krx/nl/screen은 외부 데이터 의존 → 기록만(`reproducible=False`+한글 사유). run 상세에
+   "재현성 번들" 섹션(지문·검증배지·번들 JSON 다운로드·`재현 검증` 버튼). 라우트
+   `GET /runs/{id}/bundle.json`(첨부), `POST /runs/{id}/reproduce`(합성만, 재실행→지문비교→
+   verdict를 bundle.json에 각인, 외부데이터는 422).
 
 ## 아키텍처 (`src/quantlab/web/`)
 - `store.py` — RunRecord(+universe_size/window/note), RunStore(append/list/get/delete, report_path).
@@ -53,7 +59,9 @@ KRX 실데이터는 `.[data]` + KRX 네트워크. **둘 다 없어도** 합성/C
 - `service.py` — 오케스트레이션. run_synthetic/csv/krx/nl_backtest, run_screen, run_pbo_comparison,
   read_trials/read_holdout_audit/read_screen, get_llm_client/krx_available. **분석 로직은 코어 재사용**.
 - `pages.py` — 서버렌더 HTML(_shell+nav, 대시보드/종목찾기/비교/감사/상세/결과). 인라인 CSS,
-  리포트와 같은 팔레트, self-contained, 한글, theme-aware.
+  리포트와 같은 팔레트, self-contained, 한글, theme-aware. 상세엔 `_repro_section`(번들 표시).
+- `repro.py` — 재현성 번들. `SEEDS`, `result_fingerprint(out)`, `write_bundle`, `read_bundle`,
+  `reproduce_run`(합성 재실행→지문 비교, 임시 trials.jsonl 사용해 실제 시도수 오염 안 함).
 - `app.py` — FastAPI 팩토리(라우트). create_app(runs_dir, n_shuffles, max_workers, llm_client).
 - 탭: **대시보드 · 종목 찾기 · 비교 · 무결성 감사**. 데이터: **합성 · 자연어 · CSV · KRX**.
 
@@ -65,7 +73,7 @@ KRX 실데이터는 `.[data]` + KRX 네트워크. **둘 다 없어도** 합성/C
 - **테스트는 network-free**: fake DataSource(`tests/fakes.RichFakeDataSource`) + FakeLLM 주입.
 
 ## 다음 후보 (아직 안 함)
-- **재현성 번들**: 실행별 config/expr/seed/데이터핀/버전을 묶어 100% 재현 (PRD 성공지표).
+- **데이터 핀**: csv/krx/screen 실행의 원천 데이터를 번들에 해시-핀 → 외부 데이터도 100% 재현.
 - **페이퍼 트레이딩**: 선택 전략/스크린의 목표비중을 앞으로 추적(종이 포트폴리오).
 - **결과 내보내기**: 스크린 매칭 종목·지표를 CSV/JSON 다운로드.
 - **리서치 파이프라인**: 리밸런스일별 완전 point-in-time 유니버스(현재 v1은 start 시점 1회).

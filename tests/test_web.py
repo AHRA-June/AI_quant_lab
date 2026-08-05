@@ -58,6 +58,12 @@ def _wait_jobs_settled(client, timeout=25):
         time.sleep(0.1)
     raise AssertionError("jobs did not settle")
 
+
+def _enqueue_and_drain(client):
+    """Enqueue one synthetic run, wait for it, and return its run id."""
+    client.post("/api/runs", json={"strategy": STRAT, "n_positions": 12})
+    return _wait_runs(client, 1)[0]["id"]
+
 fastapi = pytest.importorskip("fastapi")  # skip cleanly if the web extra is absent
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -462,3 +468,78 @@ def test_jobqueue_cancels_queued_but_not_running():
     assert q.cancel(a.id) is False                  # running can't be interrupted
     gate.set()
     q.shutdown()
+
+
+# --- Reproducibility bundle ------------------------------------------------
+
+
+def test_synthetic_run_writes_reproducible_bundle(tmp_path):
+    from quantlab.web.repro import read_bundle
+
+    store = RunStore(tmp_path)
+    rec = run_synthetic_backtest(store, strategy=STRAT, n_positions=15, n_shuffles=8)
+    b = read_bundle(store, rec.id)
+    assert b is not None
+    assert b["kind"] == "synthetic" and b["reproducible"] is True
+    assert len(b["fingerprint"]) == 16
+    assert b["inputs"]["strategy"] == STRAT and b["inputs"]["n_positions"] == 15
+    assert b["seeds"] == {"synthetic_market": 42, "shuffle": 0}
+    assert "quantlab" in b["version"] and "python" in b["version"]
+    assert b["verification"] is None
+
+
+def test_fingerprint_is_deterministic_across_runs(tmp_path):
+    from quantlab.web.repro import read_bundle
+
+    s1 = RunStore(tmp_path / "a")
+    s2 = RunStore(tmp_path / "b")
+    r1 = run_synthetic_backtest(s1, strategy=STRAT, n_positions=15, n_shuffles=8)
+    r2 = run_synthetic_backtest(s2, strategy=STRAT, n_positions=15, n_shuffles=8)
+    assert read_bundle(s1, r1.id)["fingerprint"] == read_bundle(s2, r2.id)["fingerprint"]
+
+
+def test_reproduce_run_matches_and_stamps_verdict(tmp_path):
+    from quantlab.web.repro import read_bundle, reproduce_run
+
+    store = RunStore(tmp_path)
+    rec = run_synthetic_backtest(store, strategy=STRAT, n_positions=15, n_shuffles=8)
+    v = reproduce_run(store, rec.id)
+    assert v["matches"] is True
+    assert len(v["reproduced_fingerprint"]) == 16
+    # verdict is stamped back into the bundle on disk
+    assert read_bundle(store, rec.id)["verification"]["matches"] is True
+
+
+def test_reproduce_external_data_run_is_rejected(tmp_path):
+    from datetime import date
+
+    from quantlab.web.repro import reproduce_run
+
+    store = RunStore(tmp_path)
+    csv = _write_long_csv(tmp_path / "prices.csv")
+    rec = run_csv_backtest(
+        store, csv_path=csv, config_yaml=_CSV_CFG,
+        start=date(2022, 6, 1), end=date(2023, 6, 1), n_shuffles=8,
+    )
+    with pytest.raises(ValueError):
+        reproduce_run(store, rec.id)
+
+
+def test_bundle_json_endpoint_serves_attachment(client):
+    rid = _enqueue_and_drain(client)
+    r = client.get(f"/runs/{rid}/bundle.json")
+    assert r.status_code == 200
+    assert "attachment" in r.headers.get("content-disposition", "")
+    assert r.json()["kind"] == "synthetic"
+
+
+def test_reproduce_endpoint_redirects_and_detail_shows_verdict(client):
+    rid = _enqueue_and_drain(client)
+    r = client.post(f"/runs/{rid}/reproduce", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == f"/runs/{rid}"
+    detail = client.get(f"/runs/{rid}").text
+    assert "재현성 번들" in detail and "지문 일치" in detail
+
+
+def test_bundle_json_missing_run_404(client):
+    assert client.get("/runs/does-not-exist/bundle.json").status_code == 404
