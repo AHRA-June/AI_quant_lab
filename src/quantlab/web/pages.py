@@ -31,7 +31,9 @@ h1 b{color:var(--primary)}
 .summary .v{font-family:var(--mono);font-size:20px;font-weight:600}
 h2{font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:26px 0 12px}
 form.new{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap}
+form.new .src-fields{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap}
 form.new label{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted2)}
+form.new textarea{resize:vertical}
 form.new select,form.new input{background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px 11px;font:14px var(--mono);min-width:160px}
 form.new button{background:var(--primary);color:#00285d;border:0;border-radius:8px;padding:10px 18px;font-weight:700;cursor:pointer;font-size:13px}
 @media (prefers-color-scheme:light){form.new button{color:#fff}}
@@ -66,12 +68,14 @@ def _pct(x: float) -> str:
 def _card(r: RunRecord) -> str:
     badge = ("pass", "통과") if r.survives else ("fail", "폐기")
     dd_neg = " neg" if r.max_drawdown < 0 else ""
+    extra = f" · 유니버스 {r.universe_size}" if r.universe_size else ""
+    extra += f" · {_e(r.window)}" if r.window else ""
     return f"""
 <div class="card">
   <div class="row1">
     <div>
       <div class="name">{_e(r.strategy)}</div>
-      <div class="when">{_e(r.source)} · 종목 {r.n_positions}개 · {_e(r.created_at)}</div>
+      <div class="when">{_e(r.source)} · 종목 {r.n_positions}개{extra} · {_e(r.created_at)}</div>
     </div>
     <span class="badge {badge[0]}">{badge[1]}</span>
   </div>
@@ -84,9 +88,15 @@ def _card(r: RunRecord) -> str:
 </div>"""
 
 
+DEFAULT_CONFIG_YAML = """alpha: "rank(returns(close, 120)) * rank(ts_mean(volume, 20) / ts_mean(volume, 60))"
+universe: {market: [KOSPI], top_mktcap: 100, min_turnover: 1e7}
+portfolio: {n_positions: 20, weighting: equal, rebalance: monthly}"""
+
+
 def dashboard_page(records: list[RunRecord], strategies: list[str]) -> str:
     survived = sum(1 for r in records if r.survives)
     options = "".join(f'<option value="{_e(s)}">{_e(s)}</option>' for s in strategies)
+    default_yaml = _e(DEFAULT_CONFIG_YAML)
     if records:
         body = f'<div class="grid">{"".join(_card(r) for r in records)}</div>'
     else:
@@ -105,17 +115,45 @@ def dashboard_page(records: list[RunRecord], strategies: list[str]) -> str:
   <div><div class="k">전략 종류</div><div class="v">{len(strategies)}</div></div>
 </div>
 <h2>새 백테스트</h2>
-<form class="new" method="post" action="/api/runs">
-  <label>전략
-    <select name="strategy">{options}</select>
+<form class="new" method="post" action="/api/runs" enctype="multipart/form-data">
+  <label>데이터
+    <select name="source" id="source-select">
+      <option value="synthetic">합성 데이터</option>
+      <option value="csv">실데이터 (CSV 업로드)</option>
+    </select>
   </label>
-  <label>보유 종목 수
-    <input type="number" name="n_positions" value="20" min="1" max="30">
-  </label>
+  <div id="fields-synthetic" class="src-fields">
+    <label>전략
+      <select name="strategy">{options}</select>
+    </label>
+    <label>보유 종목 수
+      <input type="number" name="n_positions" value="20" min="1" max="30">
+    </label>
+  </div>
+  <div id="fields-csv" class="src-fields" style="display:none">
+    <label>OHLCV CSV 파일
+      <input type="file" name="csv" accept=".csv">
+    </label>
+    <label>시작일<input type="date" name="start"></label>
+    <label>종료일<input type="date" name="end"></label>
+    <label style="min-width:320px;flex:1">전략 설정 (DSL YAML)
+      <textarea name="config_yaml" rows="4" style="font:12px var(--mono);width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px 11px">{default_yaml}</textarea>
+    </label>
+  </div>
   <button type="submit">백테스트 실행</button>
 </form>
-<div class="hint">합성 데이터로 즉시 실행됩니다(네트워크 불필요). 모든 실행은 실패 포함 자동 기록되고,
-수익률을 무작위로 섞은 셔플 대조군과 비교해 <b>통과/폐기</b>가 판정됩니다.</div>
+<div class="hint">합성 데이터는 즉시 실행됩니다(네트워크 불필요). CSV는 <b>date, open, high, low, close,
+volume, Name</b> 컬럼의 long-format 파일을 올리면 실데이터로 동일 파이프라인이 돕니다. 모든 실행은
+실패 포함 자동 기록되고, 셔플 대조군과 비교해 <b>통과/폐기</b>가 판정됩니다.</div>
+<script>
+(function(){{
+  var sel=document.getElementById('source-select');
+  var syn=document.getElementById('fields-synthetic');
+  var csv=document.getElementById('fields-csv');
+  function upd(){{ var c=sel.value==='csv'; syn.style.display=c?'none':''; csv.style.display=c?'':'none'; }}
+  sel.addEventListener('change', upd); upd();
+}})();
+</script>
 <h2>최근 실행</h2>
 {body}
 <div class="foot">AI Quant Lab · 백테스트 결과는 미래 수익을 보장하지 않습니다. 투자 자문이 아닙니다.</div>

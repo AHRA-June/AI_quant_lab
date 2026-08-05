@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from datetime import date
+
 from quantlab.demo import (
     STRATEGIES,
     _evaluate,
@@ -56,22 +58,70 @@ def run_synthetic_backtest(
         subtitle=f"{strategy} · 합성 데이터 · 종목 {n_positions}개",
     )
 
-    s = out["stats"]
-    shuf = out["shuffle"]
-    record = RunRecord(
-        id=run_id,
-        created_at=created,
-        strategy=strategy,
-        source="synthetic",
+    record = _record_from_out(
+        out, id=run_id, created_at=created, strategy=strategy, source="synthetic",
         n_positions=n_positions,
-        cagr=float(s["cagr"]),
-        sharpe=float(s["sharpe"]),
-        max_drawdown=float(s["max_drawdown"]),
-        total_return=float(s["total_return"]),
-        shuffle_p=float(shuf.p_value),
-        survives=bool(shuf.survives),
-        trials_logged=int(out["trials_logged"]),
-        report_file="report.html",
     )
     store.append(record)
     return record
+
+
+def run_csv_backtest(
+    store: RunStore,
+    *,
+    csv_path: str | Path,
+    config_yaml: str,
+    start: date,
+    end: date,
+    n_shuffles: int = 50,
+    ticker_col: str = "Name",
+    data_label: str = "CSV real data",
+) -> RunRecord:
+    """Backtest a DSL strategy on a downloaded OHLCV CSV via :class:`CsvDataSource`.
+
+    Runs the *same* real-data path as live KRX (``run_backtest``): point-in-time
+    universe → adjusted panels → DSL alpha → backtest → integrity → report. The
+    result is persisted with the identical :class:`RunRecord` shape as a synthetic
+    run, so both kinds of run share the dashboard's list/report views.
+    """
+    from quantlab.data.csv_source import CsvDataSource
+    from quantlab.dsl.config import StrategyConfig
+    from quantlab.run import run_backtest
+
+    source = CsvDataSource.from_csv(csv_path, ticker_col=ticker_col)
+    config = StrategyConfig.from_yaml(config_yaml)
+
+    created = _now_iso()
+    label = config.content_hash()
+    run_id = RunRecord.new_id(created, f"csv-{label[:8]}")
+    run_dir = store.run_dir(run_id)
+
+    out = run_backtest(
+        source, config, start=start, end=end,
+        cache_dir=store.base / "cache" / run_id, out_dir=run_dir,
+        n_shuffles=n_shuffles, data_label=data_label,
+    )
+    record = _record_from_out(
+        out, id=run_id, created_at=created, strategy=f"csv:{label[:8]}", source="csv",
+        n_positions=int(getattr(config.portfolio, "n_positions", 0)),
+        universe_size=int(out.get("universe_size", 0)),
+        window=f"{start:%Y-%m-%d}→{end:%Y-%m-%d}",
+    )
+    store.append(record)
+    return record
+
+
+def _record_from_out(out: dict, *, id: str, created_at: str, strategy: str, source: str,
+                     n_positions: int, universe_size: int = 0, window: str = "") -> RunRecord:
+    """Map an evaluation/backtest ``out`` dict onto a persisted RunRecord."""
+    s = out["stats"]
+    shuf = out["shuffle"]
+    return RunRecord(
+        id=id, created_at=created_at, strategy=strategy, source=source,
+        n_positions=n_positions,
+        cagr=float(s["cagr"]), sharpe=float(s["sharpe"]),
+        max_drawdown=float(s["max_drawdown"]), total_return=float(s["total_return"]),
+        shuffle_p=float(shuf.p_value), survives=bool(shuf.survives),
+        trials_logged=int(out["trials_logged"]), report_file="report.html",
+        universe_size=universe_size, window=window,
+    )

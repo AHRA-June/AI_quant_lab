@@ -16,7 +16,11 @@ from pathlib import Path
 from typing import Optional, Union
 
 from quantlab.web.pages import dashboard_page
-from quantlab.web.service import available_strategies, run_synthetic_backtest
+from quantlab.web.service import (
+    available_strategies,
+    run_csv_backtest,
+    run_synthetic_backtest,
+)
 from quantlab.web.store import RunStore
 
 
@@ -46,31 +50,58 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
 
     @app.post("/api/runs")
     async def create_run(request: Request):
-        # Accept either an HTML form post (redirect back) or a JSON body (return JSON).
+        from dataclasses import asdict
+        from datetime import date
+
+        # JSON body → synthetic run, JSON response. Multipart form → synthetic or CSV,
+        # redirect back to the dashboard.
         ctype = request.headers.get("content-type", "")
         if "application/json" in ctype:
             payload = await request.json()
             strategy = payload.get("strategy")
-            n_positions = int(payload.get("n_positions", 20))
-            wants_json = True
-        else:
-            form = await request.form()
-            strategy = form.get("strategy")
-            n_positions = int(form.get("n_positions", 20))
-            wants_json = False
+            if not strategy:
+                raise HTTPException(status_code=422, detail="strategy is required")
+            try:
+                record = run_synthetic_backtest(
+                    store, strategy=strategy,
+                    n_positions=int(payload.get("n_positions", 20)), n_shuffles=n_shuffles,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return JSONResponse(asdict(record), status_code=201)
 
-        if not strategy:
-            raise HTTPException(status_code=422, detail="strategy is required")
+        form = await request.form()
+        source = form.get("source", "synthetic")
+
         try:
-            record = run_synthetic_backtest(
-                store, strategy=strategy, n_positions=n_positions, n_shuffles=n_shuffles,
-            )
-        except ValueError as exc:
+            if source == "csv":
+                upload = form.get("csv")
+                if upload is None or not getattr(upload, "filename", ""):
+                    raise HTTPException(status_code=422, detail="CSV file is required")
+                start_s, end_s = form.get("start"), form.get("end")
+                if not start_s or not end_s:
+                    raise HTTPException(status_code=422, detail="start and end dates are required")
+                uploads = store.base / "uploads"
+                uploads.mkdir(parents=True, exist_ok=True)
+                dest = uploads / upload.filename
+                dest.write_bytes(await upload.read())
+                run_csv_backtest(
+                    store, csv_path=dest,
+                    config_yaml=form.get("config_yaml") or "",
+                    start=date.fromisoformat(start_s), end=date.fromisoformat(end_s),
+                    n_shuffles=n_shuffles,
+                )
+            else:
+                strategy = form.get("strategy")
+                if not strategy:
+                    raise HTTPException(status_code=422, detail="strategy is required")
+                run_synthetic_backtest(
+                    store, strategy=strategy,
+                    n_positions=int(form.get("n_positions", 20)), n_shuffles=n_shuffles,
+                )
+        except (ValueError, KeyError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        if wants_json:
-            from dataclasses import asdict
-            return JSONResponse(asdict(record), status_code=201)
         return RedirectResponse(url="/", status_code=303)
 
     @app.get("/runs/{run_id}/report", response_class=HTMLResponse)

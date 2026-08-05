@@ -36,6 +36,9 @@ class RunRecord:
     survives: bool                  # shuffle control passed (p < 0.05)
     trials_logged: int
     report_file: str                # path relative to the runs directory
+    # real-data runs only (defaulted so synthetic records still load)
+    universe_size: int = 0
+    window: str = ""                # e.g. "2014-01-02→2018-02-01"
 
     @staticmethod
     def new_id(created_at: str, strategy: str) -> str:

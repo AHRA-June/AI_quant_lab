@@ -1,9 +1,38 @@
 """Web dashboard (M5): store, service, and API — all network-free (synthetic data)."""
 
+import numpy as np
+import pandas as pd
 import pytest
 
-from quantlab.web.service import available_strategies, run_synthetic_backtest
+from quantlab.web.service import (
+    available_strategies,
+    run_csv_backtest,
+    run_synthetic_backtest,
+)
 from quantlab.web.store import RunRecord, RunStore
+
+
+def _write_long_csv(path, n_tickers=30, n_days=700, seed=0):
+    """A long-format OHLCV CSV with enough history for warm-up + universe build."""
+    idx = pd.bdate_range("2021-01-01", periods=n_days)
+    rng = np.random.default_rng(seed)
+    frames = []
+    for i in range(n_tickers):
+        close = 100 * np.cumprod(1 + rng.normal(0.0004, 0.02, n_days))
+        vol = rng.lognormal(12, 0.5, n_days)
+        frames.append(pd.DataFrame({
+            "date": idx, "open": close, "high": close, "low": close,
+            "close": close, "volume": vol, "Name": f"S{i:02d}",
+        }))
+    pd.concat(frames, ignore_index=True).to_csv(path, index=False)
+    return path
+
+
+_CSV_CFG = (
+    'alpha: "rank(returns(close, 20))"\n'
+    "universe: {market: [KOSPI], top_mktcap: 20, min_turnover: 0}\n"
+    "portfolio: {n_positions: 10, weighting: equal, rebalance: monthly}\n"
+)
 
 fastapi = pytest.importorskip("fastapi")  # skip cleanly if the web extra is absent
 from fastapi.testclient import TestClient  # noqa: E402
@@ -51,6 +80,21 @@ def test_run_synthetic_backtest_rejects_unknown_strategy(tmp_path):
         run_synthetic_backtest(RunStore(tmp_path), strategy="nope", n_shuffles=5)
 
 
+def test_run_csv_backtest_real_data_path(tmp_path):
+    from datetime import date
+
+    store = RunStore(tmp_path)
+    csv = _write_long_csv(tmp_path / "prices.csv")
+    rec = run_csv_backtest(
+        store, csv_path=csv, config_yaml=_CSV_CFG,
+        start=date(2022, 6, 1), end=date(2023, 6, 1), n_shuffles=8,
+    )
+    assert rec.source == "csv"
+    assert rec.universe_size == 20 and rec.window == "2022-06-01→2023-06-01"
+    assert store.report_path(rec.id).exists()
+    assert store.get(rec.id).universe_size == 20   # round-trips through the index
+
+
 # --- API -------------------------------------------------------------------
 
 
@@ -93,6 +137,32 @@ def test_create_run_form_post_redirects_to_dashboard(client):
 
 def test_unknown_strategy_returns_422(client):
     assert client.post("/api/runs", json={"strategy": "bogus"}).status_code == 422
+
+
+def test_csv_upload_form_runs_and_appears(client, tmp_path):
+    from datetime import date
+
+    csv = _write_long_csv(tmp_path / "up.csv")
+    with csv.open("rb") as fh:
+        resp = client.post(
+            "/api/runs",
+            data={"source": "csv", "config_yaml": _CSV_CFG,
+                  "start": "2022-06-01", "end": "2023-06-01"},
+            files={"csv": ("up.csv", fh, "text/csv")},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    runs = client.get("/api/runs").json()
+    assert any(r["source"] == "csv" and r["universe_size"] == 20 for r in runs)
+
+
+def test_csv_without_file_returns_422(client):
+    resp = client.post(
+        "/api/runs",
+        data={"source": "csv", "start": "2022-06-01", "end": "2023-06-01"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 422
 
 
 def test_missing_report_404(client):
