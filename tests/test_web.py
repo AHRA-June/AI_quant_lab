@@ -34,6 +34,30 @@ _CSV_CFG = (
     "portfolio: {n_positions: 10, weighting: equal, rebalance: monthly}\n"
 )
 
+
+def _wait_runs(client, n, timeout=25):
+    """Poll until at least ``n`` finished runs exist (jobs are async)."""
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        runs = client.get("/api/runs").json()
+        if len(runs) >= n:
+            return runs
+        time.sleep(0.1)
+    raise AssertionError(f"timed out waiting for {n} run(s)")
+
+
+def _wait_jobs_settled(client, timeout=25):
+    """Poll until every job is terminal (done/failed)."""
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        jobs = client.get("/api/jobs").json()
+        if jobs and all(j["status"] in ("done", "failed") for j in jobs):
+            return jobs
+        time.sleep(0.1)
+    raise AssertionError("jobs did not settle")
+
 fastapi = pytest.importorskip("fastapi")  # skip cleanly if the web extra is absent
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -114,17 +138,25 @@ def test_dashboard_renders_and_lists_strategies(client):
     assert available_strategies()[0] in r.text  # strategy options present
 
 
-def test_create_run_json_then_appears_in_list_and_report_served(client):
+def test_create_run_json_enqueues_then_run_appears_and_report_served(client):
     resp = client.post("/api/runs", json={"strategy": STRAT, "n_positions": 12})
-    assert resp.status_code == 201
-    rec = resp.json()
+    assert resp.status_code == 202                      # enqueued, not run inline
+    assert resp.json()["status"] in ("queued", "running")
+
+    runs = _wait_runs(client, 1)
+    rec = runs[0]
     assert rec["strategy"] == STRAT
-
-    listed = client.get("/api/runs").json()
-    assert any(x["id"] == rec["id"] for x in listed)
-
     report = client.get(f"/runs/{rec['id']}/report")
     assert report.status_code == 200 and "연구 무결성 검증" in report.text
+
+
+def test_jobs_endpoint_tracks_lifecycle(client):
+    resp = client.post("/api/runs", json={"strategy": STRAT, "n_positions": 10})
+    job_id = resp.json()["job_id"]
+    jobs = _wait_jobs_settled(client)
+    job = next(j for j in jobs if j["id"] == job_id)
+    assert job["status"] == "done" and job["kind"] == "synthetic"
+    assert job["run_id"] and any(r["id"] == job["run_id"] for r in client.get("/api/runs").json())
 
 
 def test_create_run_form_post_redirects_to_dashboard(client):
@@ -152,8 +184,24 @@ def test_csv_upload_form_runs_and_appears(client, tmp_path):
             follow_redirects=False,
         )
     assert resp.status_code == 303
-    runs = client.get("/api/runs").json()
+    runs = _wait_runs(client, 1)
     assert any(r["source"] == "csv" and r["universe_size"] == 20 for r in runs)
+
+
+def test_csv_bad_config_fails_the_job(client, tmp_path):
+    csv = _write_long_csv(tmp_path / "up.csv")
+    with csv.open("rb") as fh:
+        resp = client.post(
+            "/api/runs",
+            data={"source": "csv", "config_yaml": "this: is: not valid: :::",
+                  "start": "2022-06-01", "end": "2023-06-01"},
+            files={"csv": ("up.csv", fh, "text/csv")},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303                       # accepted, fails in the worker
+    jobs = _wait_jobs_settled(client)
+    assert jobs[0]["status"] == "failed" and jobs[0]["error"]
+    assert client.get("/api/runs").json() == []          # no run persisted
 
 
 def test_csv_without_file_returns_422(client):
@@ -174,24 +222,23 @@ def test_missing_report_404(client):
 
 def test_compare_page_ranks_runs(client):
     client.post("/api/runs", json={"strategy": STRAT, "n_positions": 10})
+    _wait_runs(client, 1)
     r = client.get("/compare")
     assert r.status_code == 200 and "다중검정 PBO 분석" in r.text and STRAT in r.text
 
 
 def test_pbo_analysis_runs_and_report_served(client):
-    # before analysis, the full report 404s
-    assert client.get("/compare/report").status_code == 404
+    assert client.get("/compare/report").status_code == 404      # before analysis
     resp = client.post("/api/compare", json={})
-    assert resp.status_code == 201
-    summary = resp.json()
-    assert 0.0 <= summary["pbo"] <= 1.0 and summary["n_strategies"] >= 2
-    # report now available, and the compare page shows the verdict
+    assert resp.status_code == 202                                # enqueued
+    _wait_jobs_settled(client)
     assert client.get("/compare/report").status_code == 200
     assert "과최적화 확률" in client.get("/compare").text
 
 
 def test_audit_lists_trials_including_the_run(client):
     client.post("/api/runs", json={"strategy": STRAT, "n_positions": 10})
+    _wait_runs(client, 1)
     r = client.get("/audit")
     assert r.status_code == 200
     assert "시도 로그" in r.text and STRAT in r.text

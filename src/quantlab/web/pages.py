@@ -58,6 +58,11 @@ button.go{background:var(--primary);color:#00285d;border:0;border-radius:8px;pad
 .card a.report{align-self:flex-start;color:var(--primary);text-decoration:none;font-size:13px;font-weight:600}
 .card a.report:hover{text-decoration:underline}
 .empty{color:var(--muted);background:var(--panel);border:1px dashed var(--line);border-radius:12px;padding:28px;text-align:center}
+.jobs{display:flex;flex-direction:column;gap:8px}
+.job{display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
+.job .jobname{font-weight:600;font-size:14px}
+.job .jobkind{font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.job .joberr{flex-basis:100%;font-family:var(--mono);font-size:11px;color:var(--bad)}
 table.tbl{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
 table.tbl th,table.tbl td{padding:10px 12px;text-align:right;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
 table.tbl td:not(:first-child){font-family:var(--mono)}
@@ -106,14 +111,34 @@ def _nav(active: str) -> str:
     return f"<nav>{links}</nav>"
 
 
-def _shell(title: str, active: str, inner: str) -> str:
+def _shell(title: str, active: str, inner: str, refresh: int | None = None) -> str:
+    meta_refresh = f'<meta http-equiv="refresh" content="{refresh}">' if refresh else ""
     return f"""<!doctype html><html lang="ko"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1">{meta_refresh}
 <title>AI Quant Lab — {_e(title)}</title><style>{_CSS}</style></head><body><div class="wrap">
 <header class="top"><h1>AI <b>Quant Lab</b></h1>{_nav(active)}</header>
 {inner}
 <div class="foot">AI Quant Lab · 백테스트 결과는 미래 수익을 보장하지 않습니다. 투자 자문이 아닙니다.</div>
 </div></body></html>"""
+
+
+_JOB_BADGE = {"queued": ("warn", "대기"), "running": ("warn", "실행 중"),
+              "done": ("pass", "완료"), "failed": ("fail", "실패")}
+
+
+def _jobs_section(jobs: list) -> str:
+    """Active + recently-failed jobs. Done jobs drop off (their run shows below)."""
+    show = [j for j in jobs if j.status in ("queued", "running", "failed")][:8]
+    if not show:
+        return ""
+    items = ""
+    for j in show:
+        cls, label = _JOB_BADGE.get(j.status, ("warn", j.status))
+        err = f'<div class="joberr">{_e(j.error)}</div>' if j.error else ""
+        items += (f'<div class="job"><span class="badge {cls}">{label}</span>'
+                  f'<span class="jobname">{_e(j.label)}</span>'
+                  f'<span class="jobkind">{_e(j.kind)}</span>{err}</div>')
+    return f'<h2>실행 중 작업</h2><div class="jobs">{items}</div>'
 
 
 # --- dashboard -------------------------------------------------------------
@@ -142,10 +167,13 @@ def _card(r: RunRecord) -> str:
 </div>"""
 
 
-def dashboard_page(records: list[RunRecord], strategies: list[str]) -> str:
+def dashboard_page(records: list[RunRecord], strategies: list[str], jobs: list | None = None) -> str:
+    jobs = jobs or []
     survived = sum(1 for r in records if r.survives)
     options = "".join(f'<option value="{_e(s)}">{_e(s)}</option>' for s in strategies)
     default_yaml = _e(DEFAULT_CONFIG_YAML)
+    jobs_html = _jobs_section(jobs)
+    active = any(getattr(j, "active", False) for j in jobs)
     if records:
         body = f'<div class="grid">{"".join(_card(r) for r in records)}</div>'
     else:
@@ -180,8 +208,9 @@ def dashboard_page(records: list[RunRecord], strategies: list[str]) -> str:
   <button class="go" type="submit">백테스트 실행</button>
 </form>
 <div class="hint">합성 데이터는 즉시 실행됩니다(네트워크 불필요). CSV는 <b>date, open, high, low, close,
-volume, Name</b> 컬럼의 long-format 파일을 올리면 실데이터로 동일 파이프라인이 돕니다. 모든 실행은
-실패 포함 자동 기록되고, 셔플 대조군과 비교해 <b>통과/폐기</b>가 판정됩니다.</div>
+volume, Name</b> 컬럼의 long-format 파일을 올리면 실데이터로 동일 파이프라인이 돕니다. 실행은
+백그라운드 작업 큐에서 처리되고(오래 걸려도 화면이 멈추지 않음), 실패 포함 자동 기록됩니다.</div>
+{jobs_html}
 <h2>최근 실행</h2>
 {body}
 <script>
@@ -193,7 +222,7 @@ volume, Name</b> 컬럼의 long-format 파일을 올리면 실데이터로 동�
   sel.addEventListener('change', upd); upd();
 }})();
 </script>"""
-    return _shell("대시보드", "dashboard", inner)
+    return _shell("대시보드", "dashboard", inner, refresh=2 if active else None)
 
 
 # --- compare ---------------------------------------------------------------
