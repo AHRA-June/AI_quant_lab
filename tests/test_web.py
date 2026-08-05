@@ -299,6 +299,41 @@ def test_rerun_synthetic_enqueues_second_run(client):
     _wait_runs(client, 2)                          # a second run appears
 
 
+def test_run_krx_backtest_with_injected_source(tmp_path):
+    from datetime import date
+
+    from quantlab.web.service import run_krx_backtest
+    from tests.fakes import RichFakeDataSource
+
+    cfg = (
+        'alpha: "rank(returns(close, 20)) * rank(ts_mean(volume, 5) / ts_mean(volume, 20))"\n'
+        "universe: {market: [KOSPI], top_mktcap: 20, min_turnover: 1e8}\n"
+        "portfolio: {n_positions: 5, weighting: equal, rebalance: weekly}\n"
+    )
+    store = RunStore(tmp_path)
+    rec = run_krx_backtest(
+        store, config_yaml=cfg, start=date(2021, 7, 1), end=date(2022, 12, 31),
+        n_shuffles=8, source=RichFakeDataSource(),      # inject fake → no network/pykrx
+    )
+    assert rec.source == "krx" and rec.universe_size == 20
+    assert rec.window == "2021-07-01→2022-12-31"
+    assert store.report_path(rec.id).exists()
+
+
+def test_krx_gated_when_pykrx_absent(client):
+    from quantlab.web.service import krx_available
+
+    if krx_available():                                  # env-dependent
+        pytest.skip("pykrx is installed")
+    assert "pykrx 미설치" in client.get("/").text          # option disabled with a hint
+    resp = client.post(
+        "/api/runs",
+        data={"source": "krx", "start": "2021-07-01", "end": "2022-12-31", "config_yaml": "x"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 422                        # can't run without the extra
+
+
 def test_run_nl_backtest_generates_dsl_runs_and_comments(tmp_path):
     from quantlab.web.service import run_nl_backtest
 

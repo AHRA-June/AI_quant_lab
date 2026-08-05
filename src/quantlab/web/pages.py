@@ -186,7 +186,7 @@ def _card(r: RunRecord) -> str:
 
 
 def dashboard_page(records: list[RunRecord], strategies: list[str], jobs: list | None = None,
-                   llm_available: bool = False) -> str:
+                   llm_available: bool = False, krx_available: bool = False) -> str:
     jobs = jobs or []
     survived = sum(1 for r in records if r.survives)
     options = "".join(f'<option value="{_e(s)}">{_e(s)}</option>' for s in strategies)
@@ -195,9 +195,14 @@ def dashboard_page(records: list[RunRecord], strategies: list[str], jobs: list |
     active = any(getattr(j, "active", False) for j in jobs)
     nl_option = ('<option value="nl">자연어 아이디어 (LLM)</option>' if llm_available
                  else '<option value="nl" disabled>자연어 아이디어 (LLM 미설정)</option>')
-    nl_note = ("" if llm_available else
-               '<div class="hint">자연어 입력을 켜려면 <b>ANTHROPIC_API_KEY</b>를 설정하고 '
-               "<code>pip install '.[llm]'</code> 하세요.</div>")
+    krx_option = ('<option value="krx">실데이터 (KRX 일봉)</option>' if krx_available
+                  else '<option value="krx" disabled>실데이터 (KRX — pykrx 미설치)</option>')
+    notes = []
+    if not llm_available:
+        notes.append("자연어 입력: <b>ANTHROPIC_API_KEY</b> 설정 + <code>pip install '.[llm]'</code>")
+    if not krx_available:
+        notes.append("KRX 실데이터: <code>pip install '.[data]'</code> (KRX 네트워크 필요)")
+    krx_note = (f'<div class="hint">켜려면 — {" · ".join(notes)}</div>' if notes else "")
     if records:
         body = f'<div class="grid">{"".join(_card(r) for r in records)}</div>'
     else:
@@ -216,6 +221,7 @@ def dashboard_page(records: list[RunRecord], strategies: list[str], jobs: list |
       <option value="synthetic">합성 데이터</option>
       {nl_option}
       <option value="csv">실데이터 (CSV 업로드)</option>
+      {krx_option}
     </select>
   </label>
   <div id="fields-synthetic" class="src-fields">
@@ -228,8 +234,10 @@ def dashboard_page(records: list[RunRecord], strategies: list[str], jobs: list |
         style="font:14px inherit;width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px 11px"></textarea>
     </label>
   </div>
-  <div id="fields-csv" class="src-fields" style="display:none">
+  <div id="fields-csvfile" class="src-fields" style="display:none">
     <label>OHLCV CSV 파일<input type="file" name="csv" accept=".csv"></label>
+  </div>
+  <div id="fields-realdata" class="src-fields" style="display:none">
     <label>시작일<input type="date" name="start"></label>
     <label>종료일<input type="date" name="end"></label>
     <label style="min-width:320px;flex:1">전략 설정 (DSL YAML)
@@ -239,21 +247,25 @@ def dashboard_page(records: list[RunRecord], strategies: list[str], jobs: list |
   <button class="go" type="submit">백테스트 실행</button>
 </form>
 <div class="hint">합성 데이터는 즉시 실행됩니다(네트워크 불필요). CSV는 <b>date, open, high, low, close,
-volume, Name</b> 컬럼의 long-format 파일을 올리면 실데이터로 동일 파이프라인이 돕니다. 실행은
-백그라운드 작업 큐에서 처리되고(오래 걸려도 화면이 멈추지 않음), 실패 포함 자동 기록됩니다.</div>
-{nl_note}
+volume, Name</b> long-format 파일을 올리면 실데이터로 동일 파이프라인이 돕니다. KRX는 pykrx로
+그 기간의 <b>일봉(EOD)</b>을 받아 같은 파이프라인으로 돌립니다. 실행은 백그라운드 큐에서 처리되고,
+실패 포함 자동 기록됩니다.</div>
+{krx_note}
 {jobs_html}
 <h2>최근 실행</h2>
 {body}
 <script>
 (function(){{
   var sel=document.getElementById('source-select');
-  var map={{synthetic:'fields-synthetic', nl:'fields-nl', csv:'fields-csv'}};
+  var vis={{synthetic:['fields-synthetic'], nl:['fields-nl'],
+            csv:['fields-csvfile','fields-realdata'], krx:['fields-realdata']}};
+  var all=['fields-synthetic','fields-nl','fields-csvfile','fields-realdata'];
   function upd(){{
-    for (var k in map){{
-      var el=document.getElementById(map[k]);
-      if (el) el.style.display = (sel.value===k) ? '' : 'none';
-    }}
+    var show=vis[sel.value]||[];
+    all.forEach(function(id){{
+      var el=document.getElementById(id);
+      if (el) el.style.display = (show.indexOf(id)>=0) ? '' : 'none';
+    }});
   }}
   sel.addEventListener('change', upd); upd();
 }})();
