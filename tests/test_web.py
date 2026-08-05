@@ -299,6 +299,54 @@ def test_rerun_synthetic_enqueues_second_run(client):
     _wait_runs(client, 2)                          # a second run appears
 
 
+def test_run_screen_finds_matches_and_backtests(tmp_path):
+    from datetime import date
+
+    from quantlab.web.service import read_screen, run_screen
+    from tests.fakes import RichFakeDataSource
+
+    cfg = (
+        'alpha: "close"\n'
+        "universe: {market: [KOSPI], top_mktcap: 20, min_turnover: 1e8}\n"
+        "portfolio: {n_positions: 5, weighting: equal, rebalance: weekly}\n"
+    )
+    store = RunStore(tmp_path)
+    rec = run_screen(                                    # direct expr → no LLM needed
+        store, source=RichFakeDataSource(), config_yaml=cfg,
+        start=date(2021, 7, 1), end=date(2022, 12, 31),
+        screen_expr="close > ts_mean(close, 20)", n_shuffles=8,
+    )
+    assert rec.source == "screen"
+    snap = read_screen(store, rec.id)
+    assert rec.n_positions == len(snap["matches"]) and snap["ref_date"]
+    assert store.report_path(rec.id).exists()           # matches also get a backtest report
+
+
+def test_screen_endpoint_direct_expr_no_llm(client, tmp_path):
+    assert "종목 찾기" in client.get("/screen").text
+    csv = _write_long_csv(tmp_path / "s.csv")
+    with csv.open("rb") as fh:
+        resp = client.post(                              # client fixture has NO llm client
+            "/api/screen",
+            data={"source": "csv", "start": "2022-06-01", "end": "2023-06-01",
+                  "screen_expr": "close > ts_mean(close, 20)", "config_yaml": _CSV_CFG},
+            files={"csv": ("s.csv", fh, "text/csv")}, follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    rid = _wait_runs(client, 1)[0]["id"]
+    res = client.get(f"/screen/{rid}")
+    assert res.status_code == 200 and "매칭 종목" in res.text
+
+
+def test_screen_requires_a_condition(client):
+    resp = client.post(
+        "/api/screen",
+        data={"source": "csv", "start": "2022-06-01", "end": "2023-06-01"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 422                        # neither NL nor expr given
+
+
 def test_run_krx_backtest_with_injected_source(tmp_path):
     from datetime import date
 

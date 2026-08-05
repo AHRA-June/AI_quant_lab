@@ -24,7 +24,15 @@ from pathlib import Path
 from typing import Optional, Union
 
 from quantlab.web.jobs import JobQueue
-from quantlab.web.pages import audit_page, compare_page, dashboard_page, run_detail_page
+from quantlab.web.pages import (
+    DEFAULT_CONFIG_YAML,
+    audit_page,
+    compare_page,
+    dashboard_page,
+    run_detail_page,
+    screen_page,
+    screen_result_page,
+)
 from quantlab.web.service import (
     available_strategies,
     compare_report_path,
@@ -33,10 +41,12 @@ from quantlab.web.service import (
     latest_pbo,
     read_holdout_audit,
     read_trials,
+    read_screen,
     run_csv_backtest,
     run_krx_backtest,
     run_nl_backtest,
     run_pbo_comparison,
+    run_screen,
     run_synthetic_backtest,
 )
 from quantlab.web.store import RunStore
@@ -237,6 +247,70 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
         if path is None:
             raise HTTPException(status_code=404, detail="run the PBO analysis first")
         return FileResponse(path, media_type="text/html")
+
+    # --- screener ----------------------------------------------------------
+
+    @app.get("/screen", response_class=HTMLResponse)
+    def screen() -> HTMLResponse:
+        return HTMLResponse(screen_page(
+            store.list(), llm_available=client is not None,
+            krx_available=krx_available(), default_yaml=DEFAULT_CONFIG_YAML))
+
+    @app.post("/api/screen")
+    async def create_screen(request: Request):
+        from datetime import date
+
+        form = await request.form()
+        start_s, end_s = form.get("start"), form.get("end")
+        if not start_s or not end_s:
+            raise HTTPException(status_code=422, detail="start and end dates are required")
+        try:
+            start_d, end_d = date.fromisoformat(start_s), date.fromisoformat(end_s)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"bad date: {exc}") from exc
+
+        criteria = (form.get("criteria") or "").strip() or None
+        expr = (form.get("screen_expr") or "").strip() or None
+        if not expr and not criteria:
+            raise HTTPException(status_code=422, detail="조건(자연어) 또는 직접 조건식을 입력하세요")
+        if not expr and client is None:
+            raise HTTPException(status_code=422,
+                                detail="자연어 조건은 LLM 필요 — 직접 조건식을 입력하세요")
+        cfg = form.get("config_yaml") or DEFAULT_CONFIG_YAML
+
+        src = form.get("source", "csv")
+        if src == "krx":
+            if not krx_available():
+                raise HTTPException(status_code=422, detail="KRX 미설치 — pip install '.[data]'")
+            from quantlab.data.pykrx_source import PykrxDataSource
+            make_source, data_label = (lambda: PykrxDataSource()), "KRX 일봉"
+        else:
+            upload = form.get("csv")
+            if upload is None or not getattr(upload, "filename", ""):
+                raise HTTPException(status_code=422, detail="CSV file is required")
+            uploads = store.base / "uploads"
+            uploads.mkdir(parents=True, exist_ok=True)
+            dest = uploads / upload.filename
+            dest.write_bytes(await upload.read())
+            from quantlab.data.csv_source import CsvDataSource
+            make_source, data_label = (lambda: CsvDataSource.from_csv(dest)), "CSV"
+
+        queue.submit(
+            "screen", f"screen:{(criteria or expr)[:24]}",
+            lambda: run_screen(
+                store, source=make_source(), config_yaml=cfg, start=start_d, end=end_d,
+                criteria=criteria, screen_expr=expr, client=client,
+                n_shuffles=n_shuffles, data_label=data_label).id,
+        )
+        return RedirectResponse(url="/screen", status_code=303)
+
+    @app.get("/screen/{run_id}", response_class=HTMLResponse)
+    def screen_result(run_id: str):
+        rec = store.get(run_id)
+        snap = read_screen(store, run_id)
+        if rec is None or snap is None:
+            raise HTTPException(status_code=404, detail="screen not found")
+        return HTMLResponse(screen_result_page(rec, snap))
 
     # --- integrity audit ---------------------------------------------------
 
