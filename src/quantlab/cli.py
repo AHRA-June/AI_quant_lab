@@ -164,6 +164,23 @@ def ml_demo(
 
 
 @app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", help="Bind address."),
+    port: int = typer.Option(8000, help="Port."),
+    reload: bool = typer.Option(False, help="Auto-reload on code changes (dev)."),
+) -> None:
+    """Launch the web dashboard (M5). Needs the `web` extra: pip install -e '.[web]'."""
+    try:
+        import uvicorn  # noqa: F401
+    except ModuleNotFoundError as exc:  # pragma: no cover - import guard
+        raise SystemExit(
+            "web extra not installed — run: pip install -e '.[web]'"
+        ) from exc
+    typer.echo(f"dashboard → http://{host}:{port}")
+    uvicorn.run("quantlab.web.app:create_app", host=host, port=port, reload=reload, factory=True)
+
+
+@app.command()
 def info() -> None:
     """Show effective settings (paths, cost model)."""
     s = get_settings()
