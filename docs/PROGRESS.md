@@ -61,6 +61,11 @@ KRX 실데이터는 `.[data]` + KRX 네트워크. **둘 다 없어도** 합성/C
     죽는다. `_asof_trading_day`로 유니버스 기준일을 **가장 가까운 직전 거래일로 스냅**
     (`get_nearest_business_day_in_a_week`, PIT 안전하게 prev). 빈 응답이면 한글 에러로 명확히.
     `tests/test_pykrx_source.py`(fake stock 주입, network-free)로 스냅·에러·티커 경로 검증.
+12. **입력 UX 개선** — (a) 자립형 팝업 캘린더(`_CAL_JS`+`_datefield`): 네이티브 date input 대신
+    월 그리드에서 일 클릭 → 숨은 input에 `YYYY-MM-DD`. 대시보드·종목찾기 공용. (b) 실데이터 폼에
+    전략 프리셋 5종(모멘텀+거래량/모멘텀/단기반전/저변동성/거래대금급증) + 시장·상위시총·종목수·리밸런스
+    드롭다운 → JS가 config YAML 자동 조립. 원시 YAML은 "고급" `<details>`로 강등. 백엔드 계약 불변
+    (여전히 `config_yaml` 텍스트 제출). 프리셋 alpha 전부 `compile_alpha`/`StrategyConfig` 검증 테스트.
 
 ## 아키텍처 (`src/quantlab/web/`)
 - `store.py` — RunRecord(+universe_size/window/note), RunStore(append/list/get/delete, report_path).
@@ -81,6 +86,13 @@ KRX 실데이터는 `.[data]` + KRX 네트워크. **둘 다 없어도** 합성/C
 - **LLM은 옵션**: 키 없어도 핵심 기능 동작. LLM은 자연어 번역·해설 편의만.
 - **안전 경계**: DSL/스크린은 화이트리스트 AST — 이상한 식은 실행 전 거부.
 - **테스트는 network-free**: fake DataSource(`tests/fakes.RichFakeDataSource`) + FakeLLM 주입.
+
+## 요청 백로그 (사용자가 고쳐달라고 한 것 — 처리하면 ✅)
+> 사용자가 "수정할 거 있다"고 하면 여기에 하나씩 적고, 끝나면 체크한다.
+- [x] (1) 날짜 입력: 년/월 고르면 일까지 고르는 상세 달력이 안 뜸 → **자립형 팝업 캘린더**(`_CAL_JS`,
+  `.datefield`/`.cal`)로 교체. `<input type=date>` 제거, 숨은 input에 `YYYY-MM-DD` 기록. 대시보드+종목찾기 둘 다.
+- [x] (2) DSL YAML 수기 입력 무리 → **프리셋 5종 + 친화 폼**(시장/상위시총/종목수/리밸런스)이 YAML을
+  자동 생성. YAML은 `<details>` 고급 옵션으로 강등(직접 편집도 가능). 프리셋 alpha 전부 컴파일 검증.
 
 ## 다음 후보 (아직 안 함)
 - **스크린/KRX 데이터 핀**: screen은 주입 source라 CSV처럼 파일-핀이 아님. 유니버스 패널을

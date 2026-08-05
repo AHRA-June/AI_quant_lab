@@ -163,6 +163,38 @@ def test_dashboard_renders_and_lists_strategies(client):
     assert available_strategies()[0] in r.text  # strategy options present
 
 
+def test_dashboard_has_custom_calendar_and_preset_builder(client):
+    """Real-data form uses the self-contained day-picker + preset builder,
+    not a raw native date input or a mandatory YAML box."""
+    html = client.get("/").text
+    assert '<input type="date"' not in html          # replaced by custom calendar
+    assert 'data-name="start"' in html and 'data-name="end"' in html
+    assert 'function qcal' in html                    # calendar JS shipped
+    assert 'id="preset-select"' in html               # friendly strategy picker
+    assert "DSL 수식 직접 편집" in html                # YAML demoted to advanced
+
+
+def test_all_dashboard_presets_compile_to_valid_configs():
+    """Every alpha the preset builder can emit is a valid DSL config."""
+    from quantlab.dsl.config import StrategyConfig
+
+    alphas = [
+        "rank(returns(close, 120)) * rank(ts_mean(volume, 20) / ts_mean(volume, 60))",
+        "rank(returns(close, 120))",
+        "rank(-returns(close, 5))",
+        "rank(-ts_std(returns(close, 1), 20))",
+        "rank(ts_mean(value, 5) / ts_mean(value, 60))",
+    ]
+    for alpha in alphas:
+        for mk in ("[KOSPI]", "[KOSPI, KOSDAQ]"):
+            cfg = StrategyConfig.from_yaml(
+                f'alpha: "{alpha}"\n'
+                f"universe: {{market: {mk}, top_mktcap: 100, min_turnover: 1e7}}\n"
+                f"portfolio: {{n_positions: 20, weighting: equal, rebalance: monthly}}"
+            )
+            assert cfg.alpha == alpha
+
+
 def test_create_run_json_enqueues_then_run_appears_and_report_served(client):
     resp = client.post("/api/runs", json={"strategy": STRAT, "n_positions": 12})
     assert resp.status_code == 202                      # enqueued, not run inline
