@@ -29,10 +29,12 @@ from quantlab.web.service import (
     available_strategies,
     compare_report_path,
     get_llm_client,
+    krx_available,
     latest_pbo,
     read_holdout_audit,
     read_trials,
     run_csv_backtest,
+    run_krx_backtest,
     run_nl_backtest,
     run_pbo_comparison,
     run_synthetic_backtest,
@@ -71,7 +73,8 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
     @app.get("/", response_class=HTMLResponse)
     def dashboard() -> HTMLResponse:
         return HTMLResponse(dashboard_page(
-            store.list(), available_strategies(), queue.list(), llm_available=client is not None))
+            store.list(), available_strategies(), queue.list(),
+            llm_available=client is not None, krx_available=krx_available()))
 
     @app.get("/api/runs", response_class=JSONResponse)
     def list_runs() -> JSONResponse:
@@ -140,6 +143,24 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
                 lambda: run_csv_backtest(
                     store, csv_path=dest, config_yaml=cfg,
                     start=start_d, end=end_d, n_shuffles=n_shuffles, client=client).id,
+            )
+        elif source == "krx":
+            if not krx_available():
+                raise HTTPException(status_code=422,
+                                    detail="KRX 미설치 — pip install '.[data]' 후 사용하세요")
+            start_s, end_s = form.get("start"), form.get("end")
+            if not start_s or not end_s:
+                raise HTTPException(status_code=422, detail="start and end dates are required")
+            try:
+                start_d, end_d = date.fromisoformat(start_s), date.fromisoformat(end_s)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=f"bad date: {exc}") from exc
+            cfg = form.get("config_yaml") or ""
+            queue.submit(
+                "krx", f"krx:{start_s}→{end_s}",
+                lambda: run_krx_backtest(
+                    store, config_yaml=cfg, start=start_d, end=end_d,
+                    n_shuffles=n_shuffles, client=client).id,
             )
         else:
             strategy = form.get("strategy")

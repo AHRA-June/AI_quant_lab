@@ -49,6 +49,59 @@ def get_llm_client():
     return AnthropicClient()
 
 
+def krx_available() -> bool:
+    """True when the live KRX source can run (the `data` extra is installed)."""
+    try:
+        import pykrx  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def run_krx_backtest(
+    store: RunStore,
+    *,
+    config_yaml: str,
+    start: date,
+    end: date,
+    n_shuffles: int = 50,
+    client=None,
+    source=None,
+) -> RunRecord:
+    """Backtest a DSL strategy on live KRX daily data (pykrx), same path as CSV.
+
+    ``source`` is injectable so tests drive a fake :class:`DataSource`; in
+    production it defaults to :class:`PykrxDataSource` (needs the `data` extra +
+    KRX network access — an ImportError/network failure surfaces as a failed job).
+    """
+    from quantlab.dsl.config import StrategyConfig
+    from quantlab.run import run_backtest
+
+    if source is None:
+        from quantlab.data.pykrx_source import PykrxDataSource
+        source = PykrxDataSource()
+    config = StrategyConfig.from_yaml(config_yaml)
+
+    created = _now_iso()
+    label = config.content_hash()
+    run_id = RunRecord.new_id(created, f"krx-{label[:8]}")
+    run_dir = store.run_dir(run_id)
+    out = run_backtest(
+        source, config, start=start, end=end,
+        cache_dir=store.base / "cache" / run_id, out_dir=run_dir,
+        n_shuffles=n_shuffles, data_label="KRX 실데이터 (일봉)",
+        trials_path=store.base / "trials.jsonl", client=client,
+    )
+    record = _record_from_out(
+        out, id=run_id, created_at=created, strategy=f"krx:{label[:8]}", source="krx",
+        n_positions=int(getattr(config.portfolio, "n_positions", 0)),
+        universe_size=int(out.get("universe_size", 0)),
+        window=f"{start:%Y-%m-%d}→{end:%Y-%m-%d}",
+    )
+    store.append(record)
+    return record
+
+
 def run_synthetic_backtest(
     store: RunStore,
     *,
