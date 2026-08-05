@@ -176,6 +176,35 @@ def krx_available() -> bool:
         return False
 
 
+# A default basket of liquid large-caps (KOSPI + a few KOSDAQ), used when KRX's
+# cross-sectional snapshot endpoints are down so we can't rank a universe by
+# market cap. These are public ticker *codes* only — prices come live from the
+# working per-ticker OHLCV endpoint. Editable by the user in the UI.
+DEFAULT_KRX_TICKERS = [
+    "005930", "000660", "373220", "207940", "005380", "000270", "068270",
+    "005490", "035420", "035720", "051910", "006400", "028260", "105560",
+    "055550", "012330", "003670", "066570", "015760", "032830", "017670",
+    "034730", "096770", "018260", "011200", "010130", "009150", "086790",
+    "033780", "090430", "247540", "086520", "196170",
+]
+
+
+def parse_tickers(raw: str | None) -> list[str]:
+    """Parse a free-form ticker list (comma / whitespace / newline separated) into
+    6-digit KRX codes. Non-conforming tokens are dropped; order/uniqueness kept."""
+    import re
+
+    if not raw:
+        return []
+    out, seen = [], set()
+    for tok in re.split(r"[\s,]+", raw.strip()):
+        tok = tok.strip().zfill(6) if tok.strip().isdigit() else tok.strip()
+        if re.fullmatch(r"\d{6}", tok) and tok not in seen:
+            seen.add(tok)
+            out.append(tok)
+    return out
+
+
 def run_krx_backtest(
     store: RunStore,
     *,
@@ -185,8 +214,14 @@ def run_krx_backtest(
     n_shuffles: int = 50,
     client=None,
     source=None,
+    tickers: list[str] | None = None,
 ) -> RunRecord:
     """Backtest a DSL strategy on live KRX daily data (pykrx), same path as CSV.
+
+    KRX's cross-sectional snapshot endpoints (market-cap / whole-market OHLCV)
+    are frequently unavailable while per-ticker OHLCV keeps working, so the KRX
+    universe is an **explicit basket** (``tickers``; defaults to
+    :data:`DEFAULT_KRX_TICKERS`) fetched one code at a time — no snapshot calls.
 
     ``source`` is injectable so tests drive a fake :class:`DataSource`; in
     production it defaults to :class:`PykrxDataSource` (needs the `data` extra +
@@ -199,6 +234,9 @@ def run_krx_backtest(
         from quantlab.data.pykrx_source import PykrxDataSource
         source = PykrxDataSource()
     config = StrategyConfig.from_yaml(config_yaml)
+    # Explicit basket → per-ticker fetch only (no snapshot endpoints). None →
+    # auto-universe via UniverseBuilder (needs the snapshot endpoints to be up).
+    basket = list(tickers) if tickers else None
 
     created = _now_iso()
     label = config.content_hash()
@@ -209,16 +247,18 @@ def run_krx_backtest(
         cache_dir=store.base / "cache" / run_id, out_dir=run_dir,
         n_shuffles=n_shuffles, data_label="KRX 실데이터 (일봉)",
         trials_path=store.base / "trials.jsonl", client=client,
+        tickers=basket,
     )
     write_bundle(run_dir, kind="krx", reproducible=False, out=out,
                  reason="KRX 벤더 데이터 핀 필요 (조정/정정으로 값이 바뀔 수 있음).",
                  inputs={"config_hash": label, "window": f"{start:%Y-%m-%d}→{end:%Y-%m-%d}",
-                         "n_shuffles": n_shuffles})
+                         "tickers": basket, "n_shuffles": n_shuffles})
     record = _record_from_out(
         out, id=run_id, created_at=created, strategy=f"krx:{label[:8]}", source="krx",
         n_positions=int(getattr(config.portfolio, "n_positions", 0)),
         universe_size=int(out.get("universe_size", 0)),
         window=f"{start:%Y-%m-%d}→{end:%Y-%m-%d}",
+        note=(f"KRX 바스켓 {len(basket)}종목" if basket else ""),
     )
     store.append(record)
     return record

@@ -83,6 +83,29 @@ def test_get_market_cap_walks_back_past_keyerror_to_a_day_with_data(monkeypatch)
     assert "20260501" in fake.tried and fake.tried[-1] == "20260428"
 
 
+def test_network_error_is_reported_distinctly(monkeypatch):
+    import requests
+
+    class _NetStock(_FakeStock):
+        def get_market_cap(self, d, market=None):
+            self.tried.append(d)
+            raise requests.exceptions.ProxyError("tunnel 403")
+
+    fake = _NetStock(nearest="20250701")
+    monkeypatch.setattr(pykrx_source, "_require_pykrx", lambda: fake)
+    with pytest.raises(ValueError, match="접속하지 못했습니다"):
+        PykrxDataSource().get_market_cap(date(2025, 7, 1), Market.KOSPI)
+    # bails out on the first candidate — does not hammer KRX with a full walk-back
+    assert len(fake.tried) == 1
+
+
+def test_is_network_error_detects_connection_failures():
+    import requests
+    assert pykrx_source._is_network_error(requests.exceptions.ConnectionError())
+    assert pykrx_source._is_network_error(TimeoutError())
+    assert not pykrx_source._is_network_error(KeyError("no columns"))
+
+
 def test_get_ticker_list_uses_snapped_date(monkeypatch):
     fake = _FakeStock(nearest="20250430")
     monkeypatch.setattr(pykrx_source, "_require_pykrx", lambda: fake)

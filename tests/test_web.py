@@ -10,6 +10,7 @@ from quantlab.web.service import (
     run_synthetic_backtest,
 )
 from quantlab.web.store import RunRecord, RunStore
+from tests.fakes import RichFakeDataSource
 
 
 def _write_long_csv(path, n_tickers=30, n_days=700, seed=0):
@@ -615,3 +616,69 @@ def test_reproduce_endpoint_redirects_and_detail_shows_verdict(client):
 
 def test_bundle_json_missing_run_404(client):
     assert client.get("/runs/does-not-exist/bundle.json").status_code == 404
+
+
+# --- KRX explicit-basket path (snapshot endpoints unavailable) --------------
+
+
+class _SnapshotDeadKRX(RichFakeDataSource):
+    """Models the user's broken KRX: the cross-sectional *snapshot* endpoints
+    (market cap / whole-market ticker list / ETF list) are dead, while per-ticker
+    OHLCV still works. Any accidental snapshot call fails the test loudly."""
+
+    def get_market_cap(self, on, market):
+        raise AssertionError("get_market_cap must not be called on the KRX basket path")
+
+    def get_ticker_list(self, on, market):
+        raise AssertionError("get_ticker_list must not be called on the KRX basket path")
+
+    def get_etf_etn_ticker_list(self, on):
+        raise AssertionError("get_etf_etn_ticker_list must not be called on the KRX basket path")
+
+
+def test_parse_tickers_normalizes_and_dedupes():
+    from quantlab.web.service import parse_tickers
+
+    assert parse_tickers("005930, 000660\n035420 005930") == ["005930", "000660", "035420"]
+    assert parse_tickers("5930, 660") == ["005930", "000660"]      # zero-pad to 6
+    assert parse_tickers("삼성, abc, 12345") == ["012345"]          # words dropped, digits padded
+    assert parse_tickers("") == [] and parse_tickers(None) == []
+
+
+def test_krx_backtest_uses_explicit_basket_without_snapshot_endpoints(tmp_path):
+    from datetime import date
+
+    from quantlab.web.service import run_krx_backtest
+
+    store = RunStore(tmp_path)
+    basket = ["100000", "100010", "100020", "100030", "100040", "100050"]
+    rec = run_krx_backtest(
+        store, config_yaml=_CSV_CFG, start=date(2021, 6, 1), end=date(2022, 6, 1),
+        n_shuffles=6, source=_SnapshotDeadKRX(), tickers=basket,
+    )
+    assert rec.source == "krx"
+    assert rec.universe_size == len(basket)      # exactly the basket, no ranking
+    assert store.report_path(rec.id).exists()
+    from quantlab.web.repro import read_bundle
+    assert read_bundle(store, rec.id)["inputs"]["tickers"] == basket
+
+
+def test_krx_backtest_without_basket_falls_back_to_auto_universe(tmp_path):
+    """No explicit basket → UniverseBuilder path (works when snapshots are up)."""
+    from datetime import date
+
+    from quantlab.web.service import run_krx_backtest
+
+    store = RunStore(tmp_path)
+    rec = run_krx_backtest(
+        store, config_yaml=_CSV_CFG, start=date(2021, 6, 1), end=date(2022, 6, 1),
+        n_shuffles=6, source=RichFakeDataSource(), tickers=None,   # snapshots available here
+    )
+    assert rec.source == "krx" and rec.universe_size == 20         # top_mktcap from _CSV_CFG
+
+
+def test_dashboard_shows_krx_ticker_field_with_defaults(client):
+    html = client.get("/").text
+    assert 'id="fields-krx"' in html
+    assert 'name="tickers"' in html
+    assert "005930" in html            # default basket pre-filled (Samsung Electronics)

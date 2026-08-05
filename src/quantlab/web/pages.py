@@ -273,6 +273,8 @@ def dashboard_page(records: list[RunRecord], strategies: list[str], jobs: list |
     survived = sum(1 for r in records if r.survives)
     options = "".join(f'<option value="{_e(s)}">{_e(s)}</option>' for s in strategies)
     default_yaml = _e(DEFAULT_CONFIG_YAML)
+    from quantlab.web.service import DEFAULT_KRX_TICKERS  # lazy: avoid import cycle
+    krx_default_tickers = _e(", ".join(DEFAULT_KRX_TICKERS))
     jobs_html = _jobs_section(jobs)
     active = any(getattr(j, "active", False) for j in jobs)
     nl_option = ('<option value="nl">자연어 아이디어 (LLM)</option>' if llm_available
@@ -318,6 +320,14 @@ def dashboard_page(records: list[RunRecord], strategies: list[str], jobs: list |
   </div>
   <div id="fields-csvfile" class="src-fields" style="display:none">
     <label>OHLCV CSV 파일<input type="file" name="csv" accept=".csv"></label>
+  </div>
+  <div id="fields-krx" class="src-fields" style="display:none">
+    <label style="min-width:100%;flex:1">종목 코드 (6자리 · 쉼표/공백/줄바꿈 구분)
+      <textarea name="tickers" rows="3" style="font:13px var(--mono);width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px 11px">{krx_default_tickers}</textarea>
+    </label>
+    <div class="hint" style="flex-basis:100%">KRX의 전체-종목 스냅샷 조회가 불안정해, KRX 모드는
+      <b>여기 적은 종목만</b> 종목별 시세로 받아 백테스트합니다(대형주 기본 채움, 자유 편집). 시장·상위
+      시가총액 설정은 KRX에선 무시됩니다. 전략 프리셋·보유 종목 수·리밸런스·기간은 그대로 적용됩니다.</div>
   </div>
   <div id="fields-realdata" class="src-fields" style="display:none">
     <div class="frow">
@@ -372,8 +382,8 @@ volume, Name</b> long-format 파일을 올리면 실데이터로 동일 파이�
 (function(){{
   var sel=document.getElementById('source-select');
   var vis={{synthetic:['fields-synthetic'], nl:['fields-nl'],
-            csv:['fields-csvfile','fields-realdata'], krx:['fields-realdata']}};
-  var all=['fields-synthetic','fields-nl','fields-csvfile','fields-realdata'];
+            csv:['fields-csvfile','fields-realdata'], krx:['fields-krx','fields-realdata']}};
+  var all=['fields-synthetic','fields-nl','fields-csvfile','fields-krx','fields-realdata'];
   function upd(){{
     var show=vis[sel.value]||[];
     all.forEach(function(id){{

@@ -70,6 +70,12 @@ KRX 실데이터는 `.[data]` + KRX 네트워크. **둘 다 없어도** 합성/C
     강화+기본날짜). (b) KRX 시가총액 조회를 `_asof_candidates`(스냅+7일 walk-back, vendor KeyError
     포획)로 감싸 휴장/미공개일에도 데이터 있는 날을 찾음. `tests/test_pykrx_source.py`에 walk-back 케이스.
 
+## KRX 실데이터 사용 메모 (중요)
+- KRX **스냅샷 엔드포인트는 죽어있고 종목별 시세만 됨** → 웹 KRX 모드는 **종목 코드 바스켓**으로 동작.
+  UI "종목 코드" 칸에 6자리 코드(기본 대형주 채워짐)를 넣으면 그 종목만 백테스트. 시장/상위시총 무시.
+- 바스켓 비우면 자동 유니버스(UniverseBuilder) 폴백 — 단 그건 스냅샷 엔드포인트가 살아있어야 함.
+- CSV 업로드 경로는 이 문제와 무관하게 항상 동작(권장).
+
 ## 아키텍처 (`src/quantlab/web/`)
 - `store.py` — RunRecord(+universe_size/window/note), RunStore(append/list/get/delete, report_path).
 - `jobs.py` — Job/JobQueue(제출·상태·취소, ThreadPoolExecutor).
@@ -102,6 +108,15 @@ KRX 실데이터는 `.[data]` + KRX 네트워크. **둘 다 없어도** 합성/C
 - [x] (4) KRX 백테스트 에러(휴장/최근일 KeyError) → pykrx `get_market_cap`가 데이터 없는 날에
   내부에서 KeyError. `_asof_candidates`로 **스냅 후 최대 7일 뒤로 물러나며** 데이터 있는 날 탐색,
   vendor 예외를 잡고 최종 실패 시 한글 에러. `get_nearest_business_day_in_a_week`는 **네트워크 호출**임에 유의.
+- [x] (5) KRX가 여전히 실패(2025-07-01 정상 거래일도 빈 응답) → **진단 결과**: KRX의 크로스섹션
+  스냅샷 엔드포인트(get_market_cap / get_market_ohlcv_by_ticker / get_market_cap_by_date /
+  get_index_portfolio_deposit_file)가 **전부 빈 JSON**("Expecting value")으로 죽어있고, **종목별
+  시세 `get_market_ohlcv(기간,종목)`만 생존**(pykrx 최신 업뎃해도 동일 → KRX/네트워크측 차단).
+  → **해결**: KRX 유니버스를 **명시적 종목 바스켓**으로 받아 종목별 시세만으로 구성. `run_backtest(tickers=)`
+  추가(주면 UniverseBuilder 건너뜀), `run_krx_backtest(tickers=)`+`DEFAULT_KRX_TICKERS`(대형주 33종),
+  `parse_tickers`(6자리 정규화), UI에 KRX 전용 "종목 코드" 입력칸(기본 바스켓 프리필). 죽은 스냅샷
+  엔드포인트 **호출 0**. `_SnapshotDeadKRX` fake로 그 사실을 테스트로 못박음. tickers 없으면 기존
+  자동 유니버스 폴백(스냅샷 살아있는 환경용).
 
 ## 다음 후보 (아직 안 함)
 - **스크린/KRX 데이터 핀**: screen은 주입 source라 CSV처럼 파일-핀이 아님. 유니버스 패널을
