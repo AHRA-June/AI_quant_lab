@@ -50,8 +50,12 @@ KRX 실데이터는 `.[data]` + KRX 네트워크. **둘 다 없어도** 합성/C
    = 헤드라인 지표 sha256 16자리). 합성 실행은 시드 고정 → **자동 재현 대상**(`reproducible=True`),
    csv/krx/nl/screen은 외부 데이터 의존 → 기록만(`reproducible=False`+한글 사유). run 상세에
    "재현성 번들" 섹션(지문·검증배지·번들 JSON 다운로드·`재현 검증` 버튼). 라우트
-   `GET /runs/{id}/bundle.json`(첨부), `POST /runs/{id}/reproduce`(합성만, 재실행→지문비교→
-   verdict를 bundle.json에 각인, 외부데이터는 422).
+   `GET /runs/{id}/bundle.json`(첨부), `POST /runs/{id}/reproduce`(재실행→지문비교→
+   verdict를 bundle.json에 각인, 재현 불가 종류는 422).
+10. **CSV 데이터 핀** — CSV 백테스트는 업로드 원본을 `runs/<id>/pinned/`에 복사+sha256 해시하고
+    `config_yaml`·window·ticker_col을 번들에 저장 → **CSV도 오프라인 자동 재현**(`reproducible=True`).
+    `pin_file`, `file_sha256`, `_reproduce_csv`(핀 해시 검증 후 임시 dir에 동일 실데이터 경로 재실행).
+    핀 파일 변조 시 해시 불일치로 거부. 상세 화면에 "데이터 핀: 파일·해시" 표시. **네트워크 0**.
 
 ## 아키텍처 (`src/quantlab/web/`)
 - `store.py` — RunRecord(+universe_size/window/note), RunStore(append/list/get/delete, report_path).
@@ -61,7 +65,8 @@ KRX 실데이터는 `.[data]` + KRX 네트워크. **둘 다 없어도** 합성/C
 - `pages.py` — 서버렌더 HTML(_shell+nav, 대시보드/종목찾기/비교/감사/상세/결과). 인라인 CSS,
   리포트와 같은 팔레트, self-contained, 한글, theme-aware. 상세엔 `_repro_section`(번들 표시).
 - `repro.py` — 재현성 번들. `SEEDS`, `result_fingerprint(out)`, `write_bundle`, `read_bundle`,
-  `reproduce_run`(합성 재실행→지문 비교, 임시 trials.jsonl 사용해 실제 시도수 오염 안 함).
+  `pin_file`/`file_sha256`(원본 데이터 복사+해시), `reproduce_run`(kind별 분기: synthetic 재실행,
+  csv는 핀 파일에서 재실행; 임시 trials.jsonl로 실제 시도수 오염 안 함, verdict 각인).
 - `app.py` — FastAPI 팩토리(라우트). create_app(runs_dir, n_shuffles, max_workers, llm_client).
 - 탭: **대시보드 · 종목 찾기 · 비교 · 무결성 감사**. 데이터: **합성 · 자연어 · CSV · KRX**.
 
@@ -73,7 +78,8 @@ KRX 실데이터는 `.[data]` + KRX 네트워크. **둘 다 없어도** 합성/C
 - **테스트는 network-free**: fake DataSource(`tests/fakes.RichFakeDataSource`) + FakeLLM 주입.
 
 ## 다음 후보 (아직 안 함)
-- **데이터 핀**: csv/krx/screen 실행의 원천 데이터를 번들에 해시-핀 → 외부 데이터도 100% 재현.
+- **스크린/KRX 데이터 핀**: screen은 주입 source라 CSV처럼 파일-핀이 아님. 유니버스 패널을
+  parquet로 스냅샷해 핀하면 screen/krx도 오프라인 재현 가능(다음 확장).
 - **페이퍼 트레이딩**: 선택 전략/스크린의 목표비중을 앞으로 추적(종이 포트폴리오).
 - **결과 내보내기**: 스크린 매칭 종목·지표를 CSV/JSON 다운로드.
 - **리서치 파이프라인**: 리밸런스일별 완전 point-in-time 유니버스(현재 v1은 start 시점 1회).

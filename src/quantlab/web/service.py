@@ -23,7 +23,7 @@ from quantlab.demo import (
     write_strategy_report,
 )
 from quantlab.factors.portfolio import top_n_long_only
-from quantlab.web.repro import write_bundle
+from quantlab.web.repro import pin_file, write_bundle
 from quantlab.web.store import RunRecord, RunStore, _now_iso
 
 
@@ -355,9 +355,14 @@ def run_csv_backtest(
         trials_path=store.base / "trials.jsonl",   # one shared log → complete trial count
         client=client,
     )
-    write_bundle(run_dir, kind="csv", reproducible=False, out=out,
-                 reason="CSV 데이터 핀 필요 (같은 파일이어야 재현).",
-                 inputs={"config_hash": label, "window": f"{start:%Y-%m-%d}→{end:%Y-%m-%d}",
+    pin = pin_file(run_dir, csv_path)   # copy + hash the source CSV → offline re-run
+    write_bundle(run_dir, kind="csv", reproducible=True, out=out,
+                 inputs={"config_hash": label, "config_yaml": config_yaml,
+                         "data_name": pin["name"], "data_sha256": pin["sha256"],
+                         "data_bytes": pin["bytes"], "ticker_col": ticker_col,
+                         "data_label": data_label,
+                         "start": f"{start:%Y-%m-%d}", "end": f"{end:%Y-%m-%d}",
+                         "window": f"{start:%Y-%m-%d}→{end:%Y-%m-%d}",
                          "n_shuffles": n_shuffles})
     record = _record_from_out(
         out, id=run_id, created_at=created, strategy=f"csv:{label[:8]}", source="csv",
