@@ -778,3 +778,108 @@ def test_all_screen_presets_compile():
 
     for _key, _label, expr in _SCREEN_PRESETS:
         compile_screen(expr)                             # raises if any preset is invalid
+
+
+# --- natural-language screening without an LLM key + wider KRX universe -------
+
+
+@pytest.mark.parametrize("phrase", [
+    "골든크로스",
+    "20일선 위이면서 거래량이 2배 이상",
+    "20일선 위 그리고 거래량 급등",
+    "거래량 3배 이상",
+    "60일 신고가",
+    "20일 신고가 또는 거래량 급증",
+    "최근 20일 10% 이상 상승",
+    "5일 상승",
+    "데드크로스 그리고 20일선 아래",
+])
+def test_nl_screen_translates_to_valid_dsl(phrase):
+    """Every supported Korean phrase compiles under the screen whitelist — so the
+    natural-language box works with no LLM key at all."""
+    from quantlab.dsl.nl_screen import nl_to_screen_expr
+    from quantlab.dsl.screen import compile_screen
+
+    compile_screen(nl_to_screen_expr(phrase))            # raises if the output is invalid
+
+
+def test_nl_screen_unrecognized_raises_friendly_error():
+    from quantlab.dsl.nl_screen import NlScreenError, nl_to_screen_expr
+
+    with pytest.raises(NlScreenError, match="이해하지 못했습니다"):
+        nl_to_screen_expr("맛있는 라면 관련 종목")
+
+
+def test_run_screen_natural_language_without_client(tmp_path):
+    """criteria + client=None → the rule-based translator runs the screen; no
+    LLM required (previously this raised 'LLM is not configured')."""
+    from datetime import date
+
+    from quantlab.web.service import read_screen, run_screen
+
+    store = RunStore(tmp_path)
+    rec = run_screen(
+        store, source=RichFakeDataSource(), config_yaml=_CSV_CFG,
+        start=date(2021, 7, 1), end=date(2022, 12, 31),
+        criteria="20일선 위", client=None, n_shuffles=6,
+    )
+    snap = read_screen(store, rec.id)
+    assert snap["expr"] == "close > ts_mean(close, 20)"   # translated, not LLM-generated
+    assert snap["criteria"] == "20일선 위"                  # original kept for display
+
+
+def test_screen_endpoint_natural_language_no_llm(client, tmp_path):
+    """POST a Korean phrase (no direct expr, no LLM client) → the job runs and
+    the result page lists matches."""
+    csv = _write_long_csv(tmp_path / "s.csv")
+    with csv.open("rb") as fh:
+        resp = client.post(
+            "/api/screen",
+            data={"source": "csv", "start": "2022-06-01", "end": "2023-06-01",
+                  "criteria": "20일선 위", "config_yaml": _CSV_CFG},
+            files={"csv": ("s.csv", fh, "text/csv")}, follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    rid = _wait_runs(client, 1)[0]["id"]
+    assert "매칭 종목" in client.get(f"/screen/{rid}").text
+
+
+def test_screen_endpoint_bad_nl_returns_422_synchronously(client, tmp_path):
+    """An unrecognised Korean phrase gets a friendly 422 up front, not a silent
+    failed job."""
+    csv = _write_long_csv(tmp_path / "s.csv")
+    with csv.open("rb") as fh:
+        resp = client.post(
+            "/api/screen",
+            data={"source": "csv", "start": "2022-06-01", "end": "2023-06-01",
+                  "criteria": "맛있는 라면 종목", "config_yaml": _CSV_CFG},
+            files={"csv": ("s.csv", fh, "text/csv")}, follow_redirects=False,
+        )
+    assert resp.status_code == 422 and "이해하지 못했습니다" in resp.text
+
+
+def test_resolve_krx_universe_returns_market_tickers(tmp_path):
+    from datetime import date
+
+    from quantlab.web.service import resolve_krx_universe
+
+    codes = resolve_krx_universe(RichFakeDataSource(), "kospi", date(2022, 12, 30))
+    assert len(codes) > 20 and all(c.isdigit() for c in codes)   # far past the 33 basket
+
+
+def test_resolve_krx_universe_friendly_error_when_list_endpoint_down(tmp_path):
+    from datetime import date
+
+    from quantlab.web.service import resolve_krx_universe
+
+    with pytest.raises(ValueError, match="목록을 불러오지 못했습니다"):
+        resolve_krx_universe(_SnapshotDeadKRX(), "all", date(2022, 12, 30))
+
+
+def test_screen_page_offers_nl_box_and_universe_selector_without_llm(client):
+    """Even with no LLM key, the natural-language box is present and the KRX
+    universe selector lets users go beyond the default basket."""
+    html = client.get("/screen").text
+    assert 'name="criteria"' in html                      # NL box always available now
+    assert "규칙 기반" in html                              # no-key hint
+    assert 'name="krx_universe"' in html and "코스피 전체" in html
