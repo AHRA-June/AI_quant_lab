@@ -30,10 +30,13 @@ from quantlab.web.pages import (
     audit_page,
     compare_page,
     dashboard_page,
+    paper_detail_page,
+    paper_list_page,
     run_detail_page,
     screen_page,
     screen_result_page,
 )
+from quantlab.web.paper import PaperStore, mark_paper, open_from_screen
 from quantlab.web.service import (
     available_strategies,
     compare_report_path,
@@ -69,6 +72,7 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
         from quantlab.config import get_settings
         runs_dir = get_settings().experiments_dir / "web"
     store = RunStore(runs_dir)
+    paper_store = PaperStore(store.base)
     queue = JobQueue(max_workers=max_workers)
     # Inject a client in tests; otherwise auto-detect (None if no key / extra).
     client = get_llm_client() if llm_client is _UNSET else llm_client
@@ -307,6 +311,7 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
 
         src = form.get("source", "csv")
         screen_tickers = None
+        csv_name = None
         if src == "krx":
             if not krx_available():
                 raise HTTPException(status_code=422, detail="KRX 미설치 — pip install '.[data]'")
@@ -334,6 +339,7 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
             uploads.mkdir(parents=True, exist_ok=True)
             dest = uploads / upload.filename
             dest.write_bytes(await upload.read())
+            csv_name = upload.filename
             from quantlab.data.csv_source import CsvDataSource
             make_source, data_label = (lambda: CsvDataSource.from_csv(dest)), "CSV"
 
@@ -342,7 +348,8 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
             lambda: run_screen(
                 store, source=make_source(), config_yaml=cfg, start=start_d, end=end_d,
                 criteria=criteria, screen_expr=expr, client=client, tickers=screen_tickers,
-                n_shuffles=n_shuffles, data_label=data_label).id,
+                n_shuffles=n_shuffles, data_label=data_label,
+                kind=src, data_ref=csv_name).id,
         )
         return RedirectResponse(url="/screen", status_code=303)
 
@@ -375,6 +382,71 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
             media_type="text/csv; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="matches_{run_id}.csv"'},
         )
+
+    # --- paper trading -----------------------------------------------------
+
+    @app.get("/paper", response_class=HTMLResponse)
+    def paper_list() -> HTMLResponse:
+        return HTMLResponse(paper_list_page(paper_store.list()))
+
+    @app.post("/api/paper")
+    async def create_paper(request: Request):
+        form = await request.form()
+        run_id = (form.get("run_id") or "").strip()
+        snap = read_screen(store, run_id)
+        if not run_id or snap is None:
+            raise HTTPException(status_code=404, detail="종목 찾기 결과를 찾을 수 없습니다")
+        kind = snap.get("kind", "csv")
+        csv_path = None
+        if kind == "csv":
+            name = snap.get("data_ref")
+            csv_path = (store.base / "uploads" / name) if name else None
+        try:
+            notional = float(form.get("notional") or 0) or None
+        except ValueError:
+            notional = None
+        try:
+            kwargs = {"kind": kind, "csv_path": csv_path}
+            if notional:
+                kwargs["notional"] = notional
+            p = open_from_screen(store, paper_store, run_id, **kwargs)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/paper/{p.id}", status_code=303)
+
+    @app.get("/paper/{pid}", response_class=HTMLResponse)
+    def paper_detail(pid: str):
+        p = paper_store.get(pid)
+        if p is None:
+            raise HTTPException(status_code=404, detail="종이 포트폴리오를 찾을 수 없습니다")
+        return HTMLResponse(paper_detail_page(p))
+
+    @app.post("/paper/{pid}/mark")
+    async def paper_mark(pid: str, request: Request):
+        from datetime import date
+
+        p = paper_store.get(pid)
+        if p is None:
+            raise HTTPException(status_code=404, detail="종이 포트폴리오를 찾을 수 없습니다")
+        if p.kind == "krx" and not krx_available():
+            raise HTTPException(status_code=422,
+                                detail="KRX 재평가는 pykrx가 필요합니다 — pip install '.[data]'")
+        form = await request.form()
+        md = (form.get("mark_date") or "").strip()
+        try:
+            mark_date = date.fromisoformat(md) if md else None
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"bad date: {exc}") from exc
+        try:
+            mark_paper(paper_store, pid, mark_date=mark_date)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/paper/{pid}", status_code=303)
+
+    @app.post("/paper/{pid}/delete")
+    def paper_delete(pid: str):
+        paper_store.delete(pid)
+        return RedirectResponse(url="/paper", status_code=303)
 
     # --- integrity audit ---------------------------------------------------
 
