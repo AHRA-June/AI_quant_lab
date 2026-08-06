@@ -39,6 +39,7 @@ from quantlab.web.service import (
     compare_report_path,
     get_llm_client,
     krx_available,
+    DEFAULT_KRX_TICKERS,
     latest_pbo,
     parse_tickers,
     read_holdout_audit,
@@ -272,7 +273,7 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
     @app.get("/screen", response_class=HTMLResponse)
     def screen() -> HTMLResponse:
         return HTMLResponse(screen_page(
-            store.list(), llm_available=client is not None,
+            store.list(), jobs=queue.list(), llm_available=client is not None,
             krx_available=krx_available(), default_yaml=DEFAULT_CONFIG_YAML))
 
     @app.post("/api/screen")
@@ -298,11 +299,14 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
         cfg = form.get("config_yaml") or DEFAULT_CONFIG_YAML
 
         src = form.get("source", "csv")
+        screen_tickers = None
         if src == "krx":
             if not krx_available():
                 raise HTTPException(status_code=422, detail="KRX 미설치 — pip install '.[data]'")
             from quantlab.data.pykrx_source import PykrxDataSource
             make_source, data_label = (lambda: PykrxDataSource()), "KRX 일봉"
+            # KRX snapshot endpoints are down → screen an explicit basket, like backtests
+            screen_tickers = parse_tickers(form.get("tickers")) or list(DEFAULT_KRX_TICKERS)
         else:
             upload = form.get("csv")
             if upload is None or not getattr(upload, "filename", ""):
@@ -318,7 +322,7 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
             "screen", f"screen:{(criteria or expr)[:24]}",
             lambda: run_screen(
                 store, source=make_source(), config_yaml=cfg, start=start_d, end=end_d,
-                criteria=criteria, screen_expr=expr, client=client,
+                criteria=criteria, screen_expr=expr, client=client, tickers=screen_tickers,
                 n_shuffles=n_shuffles, data_label=data_label).id,
         )
         return RedirectResponse(url="/screen", status_code=303)

@@ -75,6 +75,7 @@ def run_screen(
     criteria: str | None = None,
     screen_expr: str | None = None,
     client=None,
+    tickers: list[str] | None = None,
     n_shuffles: int = 50,
     warmup_days: int = 400,
     ref_date=None,
@@ -107,14 +108,25 @@ def run_screen(
             raise ValueError("조건을 입력하세요")
         from quantlab.dsl.llm import ScreenGenerator
         screen_expr = ScreenGenerator(client).generate(criteria)
-    screen_fn = compile_screen(screen_expr)
+    try:
+        screen_fn = compile_screen(screen_expr)
+    except Exception as exc:  # noqa: BLE001 — surface a friendly, actionable message
+        raise ValueError(
+            f"조건식을 해석하지 못했습니다: {exc}. 한글이 아니라 조건식 문법으로 쓰세요 "
+            "— 예: close > ts_mean(close, 20) and volume > ts_mean(volume, 20) * 2 "
+            "(비교: > < >= <= · 결합: and or not)."
+        ) from exc
 
     created = _now_iso()
     run_id = RunRecord.new_id(created, "screen")
     run_dir = store.run_dir(run_id)
 
     px = PriceStore(source, OHLCVCache(store.base / "cache" / run_id))
-    tickers = UniverseBuilder(source, price_store=px).build(start, config.universe.to_spec())
+    # explicit basket (KRX, snapshot endpoints down) or point-in-time universe
+    if tickers is not None:
+        tickers = list(dict.fromkeys(t for t in tickers if t))
+    else:
+        tickers = UniverseBuilder(source, price_store=px).build(start, config.universe.to_spec())
     if not tickers:
         raise ValueError("빈 유니버스 — 날짜/시장/필터를 확인하세요")
     panels = adjusted_panels(px, tickers, start - timedelta(days=warmup_days), end)

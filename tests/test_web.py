@@ -715,3 +715,66 @@ def test_dashboard_shows_krx_ticker_field_with_defaults(client):
     assert 'id="fields-krx"' in html
     assert 'name="tickers"' in html
     assert "005930" in html            # default basket pre-filled (Samsung Electronics)
+
+
+# --- screener fixes: visible failures, presets, KRX basket, friendly errors --
+
+
+def test_screen_page_shows_presets_and_krx_ticker_box(client):
+    html = client.get("/screen").text
+    assert 'id="scr-preset"' in html                     # one-click condition picker
+    assert "20일선 위 + 거래량 급등" in html               # a preset label
+    assert 'id="scr-krx"' in html and 'name="tickers"' in html and "005930" in html
+
+
+def test_screen_failure_is_surfaced_on_the_page(client, tmp_path):
+    # a Korean sentence in the direct-expression box is not valid DSL → the job
+    # fails; the failure (and its message) must show up on /screen, not vanish.
+    csv = _write_long_csv(tmp_path / "s.csv")
+    with csv.open("rb") as fh:
+        client.post(
+            "/api/screen",
+            data={"source": "csv", "start": "2022-06-01", "end": "2023-06-01",
+                  "screen_expr": "20일평균선 초과 & 거래량 급등", "config_yaml": _CSV_CFG},
+            files={"csv": ("s.csv", fh, "text/csv")}, follow_redirects=False,
+        )
+    _wait_jobs_settled(client)
+    page = client.get("/screen").text
+    assert "실행 중 작업" in page and "실패" in page        # failure card rendered
+    assert "조건식을 해석하지 못했습니다" in page            # with the friendly message
+
+
+def test_run_screen_bad_expr_raises_friendly_error(tmp_path):
+    from datetime import date
+
+    from quantlab.web.service import run_screen
+
+    store = RunStore(tmp_path)
+    with pytest.raises(ValueError, match="조건식을 해석하지 못했습니다"):
+        run_screen(store, source=RichFakeDataSource(), config_yaml=_CSV_CFG,
+                   start=date(2021, 7, 1), end=date(2022, 12, 31),
+                   screen_expr="20일평균선 초과 & 거래량 급등", n_shuffles=6)
+
+
+def test_run_screen_krx_basket_skips_snapshot_endpoints(tmp_path):
+    from datetime import date
+
+    from quantlab.web.service import run_screen
+
+    store = RunStore(tmp_path)
+    rec = run_screen(
+        store, source=_SnapshotDeadKRX(), config_yaml=_CSV_CFG,
+        start=date(2021, 7, 1), end=date(2022, 12, 31),
+        screen_expr="close > ts_mean(close, 20)",
+        tickers=["100000", "100010", "100020", "100030"], n_shuffles=6,
+    )
+    assert rec.source == "screen" and rec.universe_size == 4
+    assert store.report_path(rec.id).exists()
+
+
+def test_all_screen_presets_compile():
+    from quantlab.dsl.screen import compile_screen
+    from quantlab.web.pages import _SCREEN_PRESETS
+
+    for _key, _label, expr in _SCREEN_PRESETS:
+        compile_screen(expr)                             # raises if any preset is invalid

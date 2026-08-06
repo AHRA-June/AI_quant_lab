@@ -544,9 +544,24 @@ def audit_page(trials: list[dict], holdout: list[dict]) -> str:
 _SCREEN_EXAMPLE = "close > ts_mean(close, 20) and volume > ts_mean(volume, 20) * 2"
 
 
-def screen_page(records: list[RunRecord], *, llm_available: bool, krx_available: bool,
-                default_yaml: str) -> str:
+_SCREEN_PRESETS = [
+    ("mavol", "20일선 위 + 거래량 급등",
+     "close > ts_mean(close, 20) and volume > ts_mean(volume, 20) * 2"),
+    ("ma20", "20일 이동평균선 위", "close > ts_mean(close, 20)"),
+    ("golden", "골든크로스 (5일선 > 20일선)", "ts_mean(close, 5) > ts_mean(close, 20)"),
+    ("volsurge", "거래량 급증 (20일 평균 2배)", "volume > ts_mean(volume, 20) * 2"),
+    ("near_high", "60일 신고가 근접 (5% 이내)", "close > ts_max(close, 60) * 0.95"),
+]
+
+
+def screen_page(records: list[RunRecord], *, jobs: list | None = None,
+                llm_available: bool, krx_available: bool, default_yaml: str) -> str:
+    from quantlab.web.service import DEFAULT_KRX_TICKERS  # lazy: avoid import cycle
+
+    jobs = jobs or []
+    active = any(getattr(j, "active", False) for j in jobs)
     screens = [r for r in records if r.source == "screen"]
+    krx_default_tickers = _e(", ".join(DEFAULT_KRX_TICKERS))
     krx_option = ('<option value="krx">KRX 일봉</option>' if krx_available
                   else '<option value="krx" disabled>KRX (pykrx 미설치)</option>')
     nl_field = (f"""
@@ -554,8 +569,11 @@ def screen_page(records: list[RunRecord], *, llm_available: bool, krx_available:
       <textarea name="criteria" rows="2" placeholder="예: 20일 이동평균 위이면서 거래량이 20일 평균의 2배 이상"
         style="font:14px inherit;width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px 11px"></textarea>
     </label>""" if llm_available else
-        '<div class="hint" style="flex-basis:100%">자연어 입력은 LLM 키가 있을 때 켜집니다. '
-        '지금은 아래 <b>직접 조건식</b>으로 쓰세요.</div>')
+        '<div class="hint" style="flex-basis:100%">자연어 입력은 LLM 키(<b>ANTHROPIC_API_KEY</b>)가 있을 때 켜집니다. '
+        '키 없이도 아래 <b>빠른 조건</b>을 고르거나 <b>직접 조건식</b>을 쓰면 됩니다.</div>')
+
+    preset_opts = "".join(f'<option value="{_e(expr)}">{_e(label)}</option>'
+                          for _, label, expr in _SCREEN_PRESETS)
 
     if screens:
         rows = "".join(
@@ -571,7 +589,7 @@ def screen_page(records: list[RunRecord], *, llm_available: bool, krx_available:
     inner = f"""
 <h2>종목 찾기 (스크리너)</h2>
 <div class="desc">조건을 만족하는 종목을 <b>찾아 리스트로</b> 보여주고, 그 종목들을 동일가중으로
-담았을 때의 <b>백테스트 성과</b>까지 냅니다. 조건은 자연어 또는 직접 조건식으로.</div>
+담았을 때의 <b>백테스트 성과</b>까지 냅니다. 아래 <b>빠른 조건</b>을 고르면 조건식이 자동으로 채워집니다.</div>
 <form class="new" method="post" action="/api/screen" enctype="multipart/form-data">
   <label>데이터
     <select name="source" id="scr-source">
@@ -580,8 +598,19 @@ def screen_page(records: list[RunRecord], *, llm_available: bool, krx_available:
     </select>
   </label>
   <div id="scr-csv" class="src-fields"><label>OHLCV CSV 파일<input type="file" name="csv" accept=".csv"></label></div>
+  <div id="scr-krx" class="src-fields" style="display:none">
+    <label style="min-width:100%;flex:1">종목 코드 (6자리 · 쉼표/공백/줄바꿈 구분)
+      <textarea name="tickers" rows="2" style="font:13px var(--mono);width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px 11px">{krx_default_tickers}</textarea>
+    </label>
+  </div>
   {_datefield("start", "시작일", -365)}
   {_datefield("end", "종료일", 0)}
+  <label>빠른 조건
+    <select id="scr-preset">
+      <option value="">— 직접 입력 —</option>
+      {preset_opts}
+    </select>
+  </label>
   {nl_field}
   <label style="min-width:340px;flex:1">직접 조건식 (불리언)
     <textarea name="screen_expr" rows="2" placeholder="예: {_SCREEN_EXAMPLE}"
@@ -594,18 +623,26 @@ def screen_page(records: list[RunRecord], *, llm_available: bool, krx_available:
   <button class="go" type="submit">종목 찾기 실행</button>
 </form>
 <div class="hint">비교: <code>&gt; &lt; &gt;= &lt;=</code> · 결합: <code>and</code> <code>or</code> <code>not</code>
- · 연산자: rank, ts_mean, ts_max, returns, delay … (<code>==</code>는 불가). 자연어 없이 직접 조건식만 써도 됩니다.</div>
+ · 연산자: rank, ts_mean, ts_max, returns, delay … (<code>==</code>는 불가). 한글 문장은 직접 조건식 칸에 넣으면 안 됩니다 — 빠른 조건을 쓰세요.</div>
+{_jobs_section(jobs)}
 <h2>최근 종목 찾기</h2>
 {recent}
 <script>
 (function(){{
-  var sel=document.getElementById('scr-source'), csv=document.getElementById('scr-csv');
-  function upd(){{ csv.style.display = (sel.value==='csv') ? '' : 'none'; }}
+  var sel=document.getElementById('scr-source');
+  var csv=document.getElementById('scr-csv'), krx=document.getElementById('scr-krx');
+  function upd(){{
+    csv.style.display = (sel.value==='csv') ? '' : 'none';
+    krx.style.display = (sel.value==='krx') ? '' : 'none';
+  }}
   sel.addEventListener('change', upd); upd();
+  var pre=document.getElementById('scr-preset');
+  var expr=document.querySelector('textarea[name=screen_expr]');
+  if(pre) pre.addEventListener('change', function(){{ if(pre.value) expr.value=pre.value; }});
 }})();
 {_CAL_JS}
 </script>"""
-    return _shell("종목 찾기", "screen", inner)
+    return _shell("종목 찾기", "screen", inner, refresh=2 if active else None)
 
 
 def screen_result_page(r: RunRecord, snap: dict) -> str:
