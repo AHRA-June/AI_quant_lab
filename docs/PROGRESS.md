@@ -19,6 +19,9 @@ M0–M4(백테스트 코어 + 리포트)는 완료. 지금은 **M5 제품화 = �
      전체목록 엔드포인트 다운 시 친절 에러로 바스켓 폴백 유도.
   3. **종목 이름 표시**: 결과 페이지·CSV 모두 이미 `name` 포함(KRX `get_ticker_name`) — CSV 업로드에 Name 컬럼 없으면 코드로 폴백됨을 UI로 설명.
 
+**워크플로 자동화 (사용자 요청):** patch 수기 + PR 수기 작업이 힘들다 → **Claude가 GitHub MCP `push_files`로
+직접 커밋 + `create_pull_request`로 PR 자동 생성**하도록 전환. 사용자는 병합만. (상세는 아래 "개발 환경 & 워크플로 메모".)
+
 **내일 할 일 (우선순위):**
 1. 사용자가 새로고침 후 **/screen에서 자연어("20일선 위 그리고 거래량 급등")로 CSV/KRX 종목찾기 확인**.
    실패 시 화면 실패 카드 메시지 받아 이어서 디버그.
@@ -28,16 +31,20 @@ M0–M4(백테스트 코어 + 리포트)는 완료. 지금은 **M5 제품화 = �
 **세션이 끊겼다 복귀하면:** 이 문서 위→아래로 읽고, "요청 백로그"에서 미완([ ]) 항목부터.
 
 ## 개발 환경 & 워크플로 메모 (중요)
-- **쓰기가 전부 막혀 있음**: `git push`는 프록시가 403, **GitHub MCP 파일쓰기(`create_or_update_file`/`push_files`)도
-  `403 Resource not accessible by integration`** (연동이 읽기 전용). `get_me`·파일읽기·PR조회 등 **읽기만 가능**.
-  → 따라서 매 슬라이스를 **`git format-patch`로 만들어 사용자에게 전달** → 사용자가 로컬에서 `git am < patch` 후
-  본인 계정으로 push, GitHub UI에서 PR 생성·병합. (MCP로 브랜치에 직접 푸시하려던 시도는 403으로 실패함 — 재시도 말 것.)
-- 기본 브랜치(=작업 base): `claude/ai-quant-lab-prd-xf6a6h`. 기능 브랜치: `claude/continue-1wf4bm`.
-- **패치는 반드시 최신 base에서 생성**(`git fetch origin claude/ai-quant-lab-prd-xf6a6h` 후
-  `git format-patch <base>..HEAD`). 과거 base가 stale해서 병합된 커밋이 패치에 중복돼 `git am` 충돌난 적 있음.
-- 기본 브랜치(=작업 base): `claude/ai-quant-lab-prd-xf6a6h`. 기능 브랜치: `claude/continue-1wf4bm`.
-- **패치는 반드시 최신 base에서 생성**할 것 (`git fetch` 후 `git format-patch <base>..HEAD`).
-  과거에 base가 stale해서 이전 커밋이 패치에 중복으로 섞여 `git am` 충돌난 적 있음.
+- **자동 커밋·PR 워크플로 (2026-08-06 가동 — patch 수기 전달 폐지)**: 이제 Claude가 GitHub MCP로 직접 커밋·PR 한다.
+  사용자는 GitHub UI에서 **확인·병합만** 하면 됨(patch `git am` 수기 작업 불필요).
+  - **전제**: Claude GitHub App이 **활성(unsuspend) + Contents/Pull requests: Read and write** 여야 함.
+    처음엔 앱이 정지(suspended) 상태여서 모든 쓰기가 `403 Resource not accessible by integration`로 막혔음 →
+    github.com Settings → Applications → Claude 의 **Danger zone에서 Unsuspend** 후 쓰기 정상화됨.
+    (주의: 세션 실행 중에 unsuspend하면 그 세션의 캐시 토큰이 갱신될 때까지 지연이 있을 수 있음 — 잠시 뒤 재시도하면 통과.)
+  - **자동 흐름**: ① 로컬에서 코드/테스트 작성·`pytest` 검증 → ② (브랜치 없으면) `create_branch`(from_branch=base) →
+    ③ `push_files`(owner=`AHRA-June`, repo=`AI_quant_lab`, branch=기능브랜치, files=변경파일 전체내용, message=커밋메시지)로
+    원격 커밋 → ④ `create_pull_request`(base=`claude/ai-quant-lab-prd-xf6a6h`, head=기능브랜치)로 PR 자동 생성.
+  - **주의**: `push_files`는 diff가 아니라 **파일 전체 내용**을 통째로 올림 → 올리기 전 로컬 파일을 최종본으로 만들고
+    그 내용을 넣는다. `git push` CLI는 이 세션에서 자격증명 미주입이라 항상 403 → **CLI push 쓰지 말고 MCP 사용**.
+  - 원격에 직접 커밋하므로 필요 시 `git fetch origin <branch>` + `git reset --hard origin/<branch>`로 로컬을 원격에 맞춘다.
+- 기본 브랜치(=PR base): `claude/ai-quant-lab-prd-xf6a6h` (이 repo엔 `main` 없음, PRD 브랜치가 base 역할).
+  현재 기능 브랜치: `claude/progress-md-review-lx80cy`.
 - 사용자 환경: **Windows + Python 3.14** (PATH 미등록 → `set PY=%LOCALAPPDATA%\Programs\Python\Python314\python.exe`
   후 `"%PY%" -m ...` 로 실행). pykrx는 설치돼 있으나 KRX 네트워크는 로컬에서만.
 
