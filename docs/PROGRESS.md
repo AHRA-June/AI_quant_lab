@@ -22,6 +22,9 @@ M0–M4(백테스트 코어 + 리포트)는 완료. 지금은 **M5 제품화 = �
 **워크플로 자동화 (사용자 요청):** patch 수기 + PR 수기 작업이 힘들다 → **Claude가 GitHub MCP `push_files`로
 직접 커밋 + `create_pull_request`로 PR 자동 생성**하도록 전환. 사용자는 병합만. (상세는 아래 "개발 환경 & 워크플로 메모".)
 
+**페이퍼 트레이딩 (사용자 선택 슬라이스):** 종목 찾기 결과를 종이 포트폴리오로 담아 목표비중을 앞으로 추적 →
+`web/paper.py` + `/paper` 탭 신설(담기·마킹·손익·삭제). CSV는 핀으로 오프라인 재평가, KRX는 라이브. (연대기 #14.)
+
 **내일 할 일 (우선순위):**
 1. 사용자가 새로고침 후 **/screen에서 자연어("20일선 위 그리고 거래량 급등")로 CSV/KRX 종목찾기 확인**.
    실패 시 화면 실패 카드 메시지 받아 이어서 디버그.
@@ -100,6 +103,16 @@ KRX 실데이터는 `.[data]` + KRX 네트워크. **둘 다 없어도** 합성/C
 13. **캘린더/KRX 견고화** — (a) 캘린더가 `<label>` 클릭가로채기로 안 되던 것 수정(라벨 제거+핸들러
     강화+기본날짜). (b) KRX 시가총액 조회를 `_asof_candidates`(스냅+7일 walk-back, vendor KeyError
     포획)로 감싸 휴장/미공개일에도 데이터 있는 날을 찾음. `tests/test_pykrx_source.py`에 walk-back 케이스.
+14. **페이퍼 트레이딩(종이 포트폴리오)** — `web/paper.py` 신설. 종목 찾기 결과의 매칭 종목을
+    **동일가중**으로 담아(진입가 스냅샷 + notional로 분수주 배분, 완전투자) 목표비중을 앞으로 추적.
+    `PaperHolding`/`PaperPortfolio`(mutable JSON) + `PaperStore`(base/paper/<id>/, 글롭 리스트).
+    `open_from_screen`(screen.json→holdings), `mark_paper`(주입 가능 source로 현재가 재조회 →
+    **매수후보유** 평가액·손익, 데이터 없는 종목은 held-flat + 플래그). **CSV 출처는 원본을 핀**
+    (base/paper/<id>/pinned/) → 오프라인 재평가(재현성 번들과 동일 패턴), **KRX는 라이브 pykrx**(게이팅).
+    새 탭 `/paper`(목록)·`/paper/{id}`(보유·손익·다시평가·삭제), 라우트 `POST /api/paper`(스크린에서 담기)·
+    `POST /paper/{id}/mark`(평가일 옵션)·`POST /paper/{id}/delete`. 스크린 결과에 "종이 포트폴리오로 담기".
+    screen.json에 `kind`/`data_ref` 추가(마킹용 소스 재구성). `tests/test_paper.py`(13 케이스: 동일가중
+    사이징·주입 마킹·데이터없음 스킵·진입전 거부·CSV 핀 오프라인·스토어 라운드트립·API 전체흐름).
 
 ## KRX 실데이터 사용 메모 (중요)
 - KRX **스냅샷 엔드포인트는 죽어있고 종목별 시세만 됨** → 웹 KRX 모드는 **종목 코드 바스켓**으로 동작.
@@ -117,8 +130,11 @@ KRX 실데이터는 `.[data]` + KRX 네트워크. **둘 다 없어도** 합성/C
 - `repro.py` — 재현성 번들. `SEEDS`, `result_fingerprint(out)`, `write_bundle`, `read_bundle`,
   `pin_file`/`file_sha256`(원본 데이터 복사+해시), `reproduce_run`(kind별 분기: synthetic 재실행,
   csv는 핀 파일에서 재실행; 임시 trials.jsonl로 실제 시도수 오염 안 함, verdict 각인).
+- `paper.py` — 페이퍼 트레이딩. `PaperHolding`/`PaperPortfolio`(mutable), `PaperStore`(base/paper/<id>/),
+  `open_from_screen`(스크린→동일가중 종이북+진입가), `mark_paper`(주입 source로 현재가 재조회→매수후보유
+  평가·손익), `_build_source`(csv=핀에서 재구성/krx=라이브 pykrx). CSV는 진입 시 원본 핀→오프라인 재평가.
 - `app.py` — FastAPI 팩토리(라우트). create_app(runs_dir, n_shuffles, max_workers, llm_client).
-- 탭: **대시보드 · 종목 찾기 · 비교 · 무결성 감사**. 데이터: **합성 · 자연어 · CSV · KRX**.
+- 탭: **대시보드 · 종목 찾기 · 종이 포트폴리오 · 비교 · 무결성 감사**. 데이터: **합성 · 자연어 · CSV · KRX**.
 
 ## 핵심 설계 원칙
 - **자립성**: 모든 산출 HTML은 CDN/웹폰트/외부에셋 0 (오프라인 렌더, 재현성 번들 대비).
@@ -175,10 +191,12 @@ KRX 실데이터는 `.[data]` + KRX 네트워크. **둘 다 없어도** 합성/C
 ## 다음 후보 (아직 안 함)
 - **스크린/KRX 데이터 핀**: screen은 주입 source라 CSV처럼 파일-핀이 아님. 유니버스 패널을
   parquet로 스냅샷해 핀하면 screen/krx도 오프라인 재현 가능(다음 확장).
-- **페이퍼 트레이딩**: 선택 전략/스크린의 목표비중을 앞으로 추적(종이 포트폴리오).
+- ~~**페이퍼 트레이딩**~~: ✅ 완료(연대기 #14) — 종이 포트폴리오 담기·마킹·손익. **후속 아이디어**:
+  전략(백테스트) 결과에서도 담기(현재는 스크린 출처만), 리밸런스 자동 반영, 평가 이력 시계열 차트.
 - **결과 내보내기**: 스크린 매칭 종목·지표를 CSV/JSON 다운로드.
 - **리서치 파이프라인**: 리밸런스일별 완전 point-in-time 유니버스(현재 v1은 start 시점 1회).
 - **스크리너 실데이터**: 로컬 `.[data]`로 실제 한국 종목명 스크리닝(네트워크 필요).
 
 ## 테스트/실행 상태
-`python -m pytest` → 최근 **153 passed, 1 skipped**(krx 게이팅은 pykrx 유무에 따라). 전부 network-free.
+`python -m pytest` → 최근 **215 passed, 1 skipped**(krx 게이팅은 pykrx 유무에 따라; 페이퍼 트레이딩 13건 포함).
+전부 network-free.

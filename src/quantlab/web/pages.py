@@ -198,6 +198,7 @@ def _num(x, fmt: str = ".2f") -> str:
 
 def _nav(active: str) -> str:
     items = [("/", "대시보드", "dashboard"), ("/screen", "종목 찾기", "screen"),
+             ("/paper", "종이 포트폴리오", "paper"),
              ("/compare", "비교", "compare"), ("/audit", "무결성 감사", "audit")]
     links = "".join(
         f'<a href="{href}" class="{"active" if key == active else ""}">{label}</a>'
@@ -690,12 +691,115 @@ def screen_result_page(r: RunRecord, snap: dict) -> str:
 <div class="actions">
   <a class="report" href="/runs/{_e(r.id)}/report" target="_blank">이 종목들 담았을 때 성과 리포트 ↗</a>
   <a class="report" href="/screen/{_e(r.id)}/matches.csv">종목 리스트 CSV 내려받기 ↓</a>
+  <form method="post" action="/api/paper" class="inline">
+    <input type="hidden" name="run_id" value="{_e(r.id)}">
+    <button class="go" type="submit"{' disabled title="담을 종목이 없습니다"' if not matches else ''}>종이 포트폴리오로 담기 →</button>
+  </form>
   <form method="post" action="/runs/{_e(r.id)}/delete" class="inline" style="margin-left:auto"
         onsubmit="return confirm('삭제할까요?')"><button class="danger" type="submit">삭제</button></form>
 </div>
 <h2>기준일({_e(snap.get("ref_date",""))}) 매칭 종목 · {len(matches)}개</h2>
 {table}"""
     return _shell("종목 찾기 결과", "screen", inner)
+
+
+# --- paper trading ---------------------------------------------------------
+
+
+def _won(x) -> str:
+    try:
+        return f"{float(x):,.0f}원"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _pnl_html(pnl: float | None) -> str:
+    """A signed percentage, coloured good/bad, or a dash when not yet marked."""
+    if pnl is None:
+        return '<span class="hint">미평가</span>'
+    color = "var(--good)" if pnl >= 0 else "var(--bad)"
+    return f'<span style="color:{color};font-weight:700">{pnl:+.2%}</span>'
+
+
+def paper_list_page(portfolios: list) -> str:
+    if portfolios:
+        rows = ""
+        for p in portfolios:
+            mv = _won(p.market_value) if p.marked_at else '<span class="hint">미평가</span>'
+            marked = _e(p.mark_date) if p.mark_date else "—"
+            rows += (
+                f'<tr><td><a href="/paper/{_e(p.id)}">{_e(p.name)}</a></td>'
+                f"<td>{_e(p.kind)}</td><td>{_e(p.entry_date)}</td>"
+                f"<td>{p.n_holdings}</td><td>{_won(p.notional)}</td>"
+                f"<td>{mv}</td><td>{_pnl_html(p.pnl_pct)}</td><td>{marked}</td></tr>"
+            )
+        table = ('<table class="tbl"><tr><th>포트폴리오</th><th>데이터</th><th>진입일</th>'
+                 '<th>종목수</th><th>투입금</th><th>평가금액</th><th>손익</th>'
+                 '<th>평가일</th></tr>' + rows + "</table>")
+    else:
+        table = ('<div class="empty">아직 종이 포트폴리오가 없습니다. '
+                 '<a href="/screen" style="color:var(--primary)">종목 찾기</a>에서 조건으로 종목을 찾은 뒤 '
+                 '<b>종이 포트폴리오로 담기</b>를 눌러 만드세요.</div>')
+    inner = f"""
+<h2 style="margin-top:20px">종이 포트폴리오 (페이퍼 트레이딩)</h2>
+<div class="desc">종목 찾기 결과를 <b>동일가중</b>으로 담아 목표비중을 앞으로 추적합니다.
+실제 주문 없이, 그때의 진입가를 기준으로 <b>매수 후 보유(buy-and-hold)</b> 평가액과 손익을 계산합니다.
+<b>다시 평가</b>를 누르면 현재가를 다시 받아 손익을 갱신합니다.</div>
+{table}
+<div class="hint">CSV로 만든 포트폴리오는 그때의 원본 CSV를 함께 저장(핀)해 <b>오프라인으로도 재평가</b>됩니다.
+KRX로 만든 포트폴리오는 다시 평가할 때 pykrx로 현재가를 받아옵니다(네트워크 필요).
+백테스트 결과는 미래 수익을 보장하지 않습니다.</div>"""
+    return _shell("종이 포트폴리오", "paper", inner)
+
+
+def paper_detail_page(p) -> str:
+    pnl = p.pnl_pct
+    marked = p.marked_at is not None
+    rows = ""
+    for h in sorted(p.holdings, key=lambda x: (x.pnl_pct is None, -(x.pnl_pct or 0))):
+        cur = _num(h.last_price, ",.0f") if h.last_price is not None else (
+            '<span class="hint">데이터 없음</span>' if marked else "—")
+        rows += (
+            f'<tr><td>{_e(h.name)}</td><td>{_e(h.ticker)}</td>'
+            f"<td>{h.weight:.1%}</td><td>{h.entry_price:,.0f}</td>"
+            f"<td>{h.shares:,.2f}</td><td>{cur}</td>"
+            f"<td>{_won(h.market_value)}</td><td>{_pnl_html(h.pnl_pct)}</td></tr>"
+        )
+    table = ('<table class="tbl"><tr><th>종목</th><th>코드</th><th>비중</th>'
+             '<th>진입가</th><th>주식수</th><th>현재가</th><th>평가금액</th>'
+             '<th>손익</th></tr>' + rows + "</table>")
+
+    mark_line = (f'최근 평가: <b>{_e(p.mark_date)}</b> 기준 · {_e(p.marked_at)}'
+                 if marked else '아직 평가하지 않았습니다 — <b>다시 평가</b>를 눌러 현재가를 받아오세요.')
+    value_block = f"""
+<div class="detailmeta">
+  <div><div class="k">투입금</div><div class="v">{_won(p.notional)}</div></div>
+  <div><div class="k">평가금액</div><div class="v">{_won(p.market_value) if marked else "—"}</div></div>
+  <div><div class="k">손익</div><div class="v">{_pnl_html(pnl)}</div></div>
+  <div><div class="k">진입일</div><div class="v">{_e(p.entry_date)}</div></div>
+  <div><div class="k">종목수</div><div class="v">{p.n_holdings}</div></div>
+</div>"""
+    inner = f"""
+<h2 style="margin-top:20px">{_e(p.name)}</h2>
+<div class="desc">{_e(p.kind)} · 원본 종목찾기 <a href="/screen/{_e(p.origin_run_id)}"
+  style="color:var(--primary)">#{_e(p.origin_run_id)}</a> · {_e(p.created_at)}</div>
+{f'<div class="dsl"><span>조건식</span><code>{_e(p.note)}</code></div>' if p.note else ""}
+{value_block}
+<div class="desc">{mark_line}</div>
+<div class="actions">
+  <form method="post" action="/paper/{_e(p.id)}/mark" class="inline" style="display:flex;gap:10px;align-items:flex-end">
+    {_datefield("mark_date", "평가일 (비우면 최신)")}
+    <button class="go" type="submit">다시 평가 (현재가 갱신)</button>
+  </form>
+  <form method="post" action="/paper/{_e(p.id)}/delete" class="inline" style="margin-left:auto"
+        onsubmit="return confirm('이 종이 포트폴리오를 삭제할까요?')">
+    <button class="danger" type="submit">삭제</button>
+  </form>
+</div>
+<h2>보유 종목 · {p.n_holdings}개</h2>
+{table}
+<script>{_CAL_JS}</script>"""
+    return _shell(p.name, "paper", inner)
 
 
 # --- run detail ------------------------------------------------------------

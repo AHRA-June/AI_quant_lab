@@ -80,6 +80,8 @@ def run_screen(
     warmup_days: int = 400,
     ref_date=None,
     data_label: str = "실데이터",
+    kind: str = "csv",
+    data_ref: str | None = None,
 ) -> RunRecord:
     """Screen a universe by a boolean condition, then backtest the matches.
 
@@ -167,6 +169,7 @@ def run_screen(
     (run_dir / "screen.json").write_text(json.dumps({
         "expr": screen_expr, "criteria": criteria or "", "ref_date": f"{ref_ts:%Y-%m-%d}",
         "universe_size": len(tickers), "data_label": data_label, "matches": matches,
+        "kind": kind, "data_ref": data_ref,   # how a paper book reconstructs a price source
     }, ensure_ascii=False), encoding="utf-8")
     write_bundle(run_dir, kind="screen", reproducible=False, out=out,
                  reason="외부 데이터 의존 — 조건식은 저장됨, 데이터 고정 시 수동 재현 가능.",
