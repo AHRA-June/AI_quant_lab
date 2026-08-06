@@ -102,12 +102,16 @@ def run_screen(
 
     config = StrategyConfig.from_yaml(config_yaml)
     if screen_expr is None:
-        if client is None:
-            raise ValueError("LLM is not configured (set ANTHROPIC_API_KEY and install '.[llm]')")
         if not (criteria or "").strip():
             raise ValueError("조건을 입력하세요")
-        from quantlab.dsl.llm import ScreenGenerator
-        screen_expr = ScreenGenerator(client).generate(criteria)
+        if client is not None:
+            from quantlab.dsl.llm import ScreenGenerator
+            screen_expr = ScreenGenerator(client).generate(criteria)
+        else:
+            # No LLM key → rule-based Korean translator so the natural-language
+            # box still works. Raises a friendly NlScreenError if unrecognised.
+            from quantlab.dsl.nl_screen import nl_to_screen_expr
+            screen_expr = nl_to_screen_expr(criteria)
     try:
         screen_fn = compile_screen(screen_expr)
     except Exception as exc:  # noqa: BLE001 — surface a friendly, actionable message
@@ -199,6 +203,36 @@ DEFAULT_KRX_TICKERS = [
     "034730", "096770", "018260", "011200", "010130", "009150", "086790",
     "033780", "090430", "247540", "086520", "196170",
 ]
+
+
+def resolve_krx_universe(source, choice: str, on: date) -> list[str]:
+    """Resolve a KRX screening universe wider than the default basket.
+
+    ``choice`` is one of ``"kospi"`` / ``"kosdaq"`` / ``"all"``; the codes come
+    from the per-market ticker list (``get_market_ticker_list``) rather than the
+    curated basket, so screening isn't capped at a handful of large-caps. That
+    endpoint is occasionally down (returns an empty list) — the caller gets a
+    clear message to fall back to the basket instead of an empty, silent run.
+    """
+    from quantlab.types import Market
+
+    markets = {"kospi": [Market.KOSPI], "kosdaq": [Market.KOSDAQ],
+               "all": [Market.KOSPI, Market.KOSDAQ]}.get(choice)
+    if markets is None:
+        raise ValueError(f"unknown KRX universe {choice!r}")
+    codes: list[str] = []
+    for mkt in markets:
+        try:
+            codes.extend(source.get_ticker_list(on, mkt))
+        except Exception:  # noqa: BLE001 — endpoint down / network; treated as empty below
+            pass
+    codes = list(dict.fromkeys(c for c in codes if c))
+    if not codes:
+        raise ValueError(
+            "KRX 전체 종목 목록을 불러오지 못했습니다 (스냅샷 엔드포인트 불안정). "
+            "잠시 후 다시 시도하거나, '대형주 바스켓'을 선택해 종목 코드로 검색하세요."
+        )
+    return codes
 
 
 def parse_tickers(raw: str | None) -> list[str]:

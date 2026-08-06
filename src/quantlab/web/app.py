@@ -45,6 +45,7 @@ from quantlab.web.service import (
     read_holdout_audit,
     read_trials,
     read_screen,
+    resolve_krx_universe,
     run_csv_backtest,
     run_krx_backtest,
     run_nl_backtest,
@@ -294,8 +295,14 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
         if not expr and not criteria:
             raise HTTPException(status_code=422, detail="조건(자연어) 또는 직접 조건식을 입력하세요")
         if not expr and client is None:
-            raise HTTPException(status_code=422,
-                                detail="자연어 조건은 LLM 필요 — 직접 조건식을 입력하세요")
+            # No LLM key → translate the Korean phrase with the rule-based engine
+            # up front, so an unrecognised phrase gives a synchronous, friendly
+            # error instead of a failed background job.
+            from quantlab.dsl.nl_screen import NlScreenError, nl_to_screen_expr
+            try:
+                expr = nl_to_screen_expr(criteria)
+            except NlScreenError as nl_exc:
+                raise HTTPException(status_code=422, detail=str(nl_exc)) from nl_exc
         cfg = form.get("config_yaml") or DEFAULT_CONFIG_YAML
 
         src = form.get("source", "csv")
@@ -305,8 +312,20 @@ def create_app(runs_dir: Optional[Union[str, Path]] = None, *, n_shuffles: int =
                 raise HTTPException(status_code=422, detail="KRX 미설치 — pip install '.[data]'")
             from quantlab.data.pykrx_source import PykrxDataSource
             make_source, data_label = (lambda: PykrxDataSource()), "KRX 일봉"
-            # KRX snapshot endpoints are down → screen an explicit basket, like backtests
-            screen_tickers = parse_tickers(form.get("tickers")) or list(DEFAULT_KRX_TICKERS)
+            # Universe: the curated basket (per-ticker fetch, always works) or a
+            # whole-market list (kospi/kosdaq/all) so screening isn't capped at a
+            # handful of large-caps. resolve_krx_universe raises a friendly error
+            # if KRX's list endpoint is down.
+            universe = (form.get("krx_universe") or "basket").strip()
+            if universe == "basket":
+                screen_tickers = parse_tickers(form.get("tickers")) or list(DEFAULT_KRX_TICKERS)
+                data_label = f"KRX 일봉 · 바스켓 {len(screen_tickers)}종목"
+            else:
+                try:
+                    screen_tickers = resolve_krx_universe(PykrxDataSource(), universe, end_d)
+                except ValueError as u_exc:
+                    raise HTTPException(status_code=422, detail=str(u_exc)) from u_exc
+                data_label = f"KRX 일봉 · {universe.upper()} 전체 {len(screen_tickers)}종목"
         else:
             upload = form.get("csv")
             if upload is None or not getattr(upload, "filename", ""):

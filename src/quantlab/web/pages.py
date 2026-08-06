@@ -564,13 +564,18 @@ def screen_page(records: list[RunRecord], *, jobs: list | None = None,
     krx_default_tickers = _e(", ".join(DEFAULT_KRX_TICKERS))
     krx_option = ('<option value="krx">KRX 일봉</option>' if krx_available
                   else '<option value="krx" disabled>KRX (pykrx 미설치)</option>')
-    nl_field = (f"""
-    <label style="min-width:340px;flex:1">조건 (자연어)
-      <textarea name="criteria" rows="2" placeholder="예: 20일 이동평균 위이면서 거래량이 20일 평균의 2배 이상"
+    from quantlab.dsl.nl_screen import SUPPORTED_PHRASES  # lazy: avoid import cycle
+    nl_examples = _e(" · ".join(SUPPORTED_PHRASES))
+    nl_note = ('<div class="hint" style="flex-basis:100%">💡 <b>LLM 키가 있으면</b> 자유로운 문장을 이해합니다.'
+               if llm_available else
+               '<div class="hint" style="flex-basis:100%">💡 <b>키 없이도</b> 규칙 기반으로 아래 표현을 이해합니다: '
+               f'{nl_examples}.')
+    nl_field = f"""
+    <label style="min-width:340px;flex:1">조건 (자연어 · 한국어)
+      <textarea name="criteria" rows="2" placeholder="예: 20일선 위 그리고 거래량 급등"
         style="font:14px inherit;width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px 11px"></textarea>
-    </label>""" if llm_available else
-        '<div class="hint" style="flex-basis:100%">자연어 입력은 LLM 키(<b>ANTHROPIC_API_KEY</b>)가 있을 때 켜집니다. '
-        '키 없이도 아래 <b>빠른 조건</b>을 고르거나 <b>직접 조건식</b>을 쓰면 됩니다.</div>')
+    </label>
+    {nl_note}</div>"""
 
     preset_opts = "".join(f'<option value="{_e(expr)}">{_e(label)}</option>'
                           for _, label, expr in _SCREEN_PRESETS)
@@ -599,9 +604,19 @@ def screen_page(records: list[RunRecord], *, jobs: list | None = None,
   </label>
   <div id="scr-csv" class="src-fields"><label>OHLCV CSV 파일<input type="file" name="csv" accept=".csv"></label></div>
   <div id="scr-krx" class="src-fields" style="display:none">
-    <label style="min-width:100%;flex:1">종목 코드 (6자리 · 쉼표/공백/줄바꿈 구분)
+    <label style="min-width:100%">검색 범위
+      <select name="krx_universe" id="scr-krx-univ">
+        <option value="basket">대형주 바스켓 (빠름 · 아래 종목 코드만)</option>
+        <option value="kospi">코스피 전체 (느림 · 수백 종목)</option>
+        <option value="kosdaq">코스닥 전체 (느림)</option>
+        <option value="all">코스피+코스닥 전체 (매우 느림)</option>
+      </select>
+    </label>
+    <label id="scr-krx-tickers" style="min-width:100%;flex:1">종목 코드 (6자리 · 쉼표/공백/줄바꿈 구분)
       <textarea name="tickers" rows="2" style="font:13px var(--mono);width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px 11px">{krx_default_tickers}</textarea>
     </label>
+    <div class="hint" style="flex-basis:100%">전체 범위는 종목마다 일봉을 하나씩 받아와 <b>수 분</b>이 걸릴 수 있고,
+      KRX 목록 엔드포인트가 불안정하면 실패할 수 있어요. 먼저 <b>바스켓</b>으로 확인 후 넓히길 권합니다.</div>
   </div>
   {_datefield("start", "시작일", -365)}
   {_datefield("end", "종료일", 0)}
@@ -622,8 +637,9 @@ def screen_page(records: list[RunRecord], *, jobs: list | None = None,
   </label>
   <button class="go" type="submit">종목 찾기 실행</button>
 </form>
-<div class="hint">비교: <code>&gt; &lt; &gt;= &lt;=</code> · 결합: <code>and</code> <code>or</code> <code>not</code>
- · 연산자: rank, ts_mean, ts_max, returns, delay … (<code>==</code>는 불가). 한글 문장은 직접 조건식 칸에 넣으면 안 됩니다 — 빠른 조건을 쓰세요.</div>
+<div class="hint">가장 쉬운 방법: <b>조건(자연어)</b> 칸에 한국어로 쓰거나 <b>빠른 조건</b>을 고르세요.
+ 직접 조건식은 고급용 — 비교 <code>&gt; &lt; &gt;= &lt;=</code> · 결합 <code>and</code> <code>or</code> <code>not</code>
+ · 연산자 rank, ts_mean, ts_max, returns, delay … (<code>==</code>는 불가).</div>
 {_jobs_section(jobs)}
 <h2>최근 종목 찾기</h2>
 {recent}
@@ -639,6 +655,10 @@ def screen_page(records: list[RunRecord], *, jobs: list | None = None,
   var pre=document.getElementById('scr-preset');
   var expr=document.querySelector('textarea[name=screen_expr]');
   if(pre) pre.addEventListener('change', function(){{ if(pre.value) expr.value=pre.value; }});
+  var univ=document.getElementById('scr-krx-univ');
+  var tick=document.getElementById('scr-krx-tickers');
+  function updUniv(){{ if(tick) tick.style.display = (univ.value==='basket') ? '' : 'none'; }}
+  if(univ){{ univ.addEventListener('change', updUniv); updUniv(); }}
 }})();
 {_CAL_JS}
 </script>"""
