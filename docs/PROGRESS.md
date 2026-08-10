@@ -5,33 +5,64 @@
 > **작업 슬라이스를 하나 끝낼 때마다 이 문서를 갱신해서 같은 커밋/패치에 포함**한다.
 
 ## 현재 위치 (한 줄)
-M0–M4(백테스트 코어 + 리포트)는 완료. 지금은 **M5 제품화 = 웹 대시보드**를 슬라이스로
-쌓는 중. FastAPI + self-contained HTML, 전부 네트워크-free 테스트.
+M0–M4(백테스트 코어 + 리포트) + **M5 웹 대시보드**(대시보드·종목 찾기·종이 포트폴리오·비교·무결성 감사) 완료.
+**2026-08-06 프로젝트 일시중단** — 더 급한 다른 프로젝트로 이동. 마지막 병합 = **PR #18(페이퍼 트레이딩)**.
+코드는 전부 base에 병합돼 있고 테스트 그린(**215 passed, 1 skipped**). 재개는 아래 "⏸️ 재개 가이드"부터.
 
-## 오늘 한 일 / 내일 할 일 (2026-08-06 기준, 사용자 요청 정리)
-**오늘 한 일:**
-- 스크리너 수정(8): 실패 노출 + 빠른 조건 프리셋 + KRX 바스켓 + 친절 에러 → **병합 완료**.
-- 사용자 화면 테스트 성공(웹앱 `quantlab serve`로 기동, Windows `py -m pip` 경로 안내, KRX는 `.[data]` 설치 필요 안내).
-- **스크리너 v2 (사용자 피드백 3건) → 패치 `screener_v2.patch` 전달:**
-  1. **자연어 스크리닝 키 없이 동작**: 규칙 기반 한국어→조건식 번역기 `quantlab/dsl/nl_screen.py`
-     신설(골든크로스/N일선/거래량급등/신고가/N일상승/N% 상승 등, 그리고·또는 연결). LLM 키 없으면 이 번역기가 자연어 칸을 처리.
-  2. **유니버스 33종목 한정 해소**: KRX "검색 범위" 선택(바스켓/코스피/코스닥/전체) + `resolve_krx_universe()`.
-     전체목록 엔드포인트 다운 시 친절 에러로 바스켓 폴백 유도.
-  3. **종목 이름 표시**: 결과 페이지·CSV 모두 이미 `name` 포함(KRX `get_ticker_name`) — CSV 업로드에 Name 컬럼 없으면 코드로 폴백됨을 UI로 설명.
+## ⏸️ 재개 가이드 — 새 세션/새 계정은 반드시 여기부터 읽기 (2026-08-06 중단)
 
-**워크플로 자동화 (사용자 요청):** patch 수기 + PR 수기 작업이 힘들다 → **Claude가 GitHub MCP `push_files`로
-직접 커밋 + `create_pull_request`로 PR 자동 생성**하도록 전환. 사용자는 병합만. (상세는 아래 "개발 환경 & 워크플로 메모".)
+> **한 줄:** 코드는 다 병합돼 있음. 재개하려면 ① 이 repo를 새 세션에 붙이고 ② GitHub App 쓰기 권한만
+> 확인하면 바로 이어서 개발 가능. Claude에게 줄 첫 명령: **`docs/PROGRESS.md 읽고 이어서 하자`**.
 
-**페이퍼 트레이딩 (사용자 선택 슬라이스):** 종목 찾기 결과를 종이 포트폴리오로 담아 목표비중을 앞으로 추적 →
-`web/paper.py` + `/paper` 탭 신설(담기·마킹·손익·삭제). CSV는 핀으로 오프라인 재평가, KRX는 라이브. (연대기 #14.)
+### 1) 리포지토리 / 브랜치 좌표
+- **repo**: `AHRA-June/AI_quant_lab` (GitHub, "AI 퀀트 전략실험실").
+- **base 브랜치 = 사실상 default**: `claude/ai-quant-lab-prd-xf6a6h` — ⚠️ **이 repo엔 `main`이 없다.**
+  모든 기능 PR은 이 브랜치로 병합한다. **최신 코드는 항상 이 브랜치.**
+- **작업(기능) 브랜치**: `claude/progress-md-review-lx80cy`. PR이 병합되면 그 브랜치는 끝난 것 →
+  **base에서 새로 시작해 같은 이름으로 재사용**(병합된 히스토리 위에 쌓지 말 것; `git checkout -B <브랜치> origin/<base>`).
+- **로컬(윈도우)**: 클론 후 `git checkout claude/ai-quant-lab-prd-xf6a6h`.
 
-**내일 할 일 (우선순위):**
-1. 사용자가 새로고침 후 **/screen에서 자연어("20일선 위 그리고 거래량 급등")로 CSV/KRX 종목찾기 확인**.
-   실패 시 화면 실패 카드 메시지 받아 이어서 디버그.
-2. 자연어 번역기 표현 확장 요청 오면 `nl_screen.py`의 `_clause()`에 패턴 추가(+ `SUPPORTED_PHRASES`, 테스트).
-3. 그다음 제품 슬라이스 선택지(사용자가 고르게): **페이퍼 트레이딩** / **결과 내보내기(CSV·JSON)** / **스크린·KRX 데이터 핀** / **리서치 파이프라인(리밸런스별 PIT 유니버스)**.
+### 2) 새 계정에서 "자동 커밋·PR"을 켜는 법 (제일 중요 — 안 되면 patch 수기로 회귀)
+자동화(=Claude가 직접 커밋·PR)는 **GitHub App 권한**에 100% 의존한다. 새 계정/새 세션에서 반드시 확인:
+1. 새 Claude 세션에 **이 repo가 붙어 있어야** 한다. 없으면 `list_repos`로 확인 후 `add_repo`(owner=`AHRA-June`, repo=`AI_quant_lab`).
+2. **Claude GitHub App**이 대상 repo에 **Contents: Read and write + Pull requests: Read and write** + **활성(Unsuspend)** 상태여야 한다.
+   - github.com → Settings → Applications → Installed GitHub Apps → **Claude** → Configure
+   - Repository access에 `AI_quant_lab` 포함 / 권한 위 두 개 read-write / Danger zone이 **"Suspend"로 보이면 정상**(활성).
+     **"Unsuspend"로 보이면 정지 상태** → 눌러서 활성화해야 쓰기가 열린다.
+   - ⚠️ 이번에 자동화가 처음 `403 Resource not accessible by integration` 난 **진짜 원인이 앱 정지(suspended)**였음.
+     **Unsuspend 후 `git push`·MCP `push_files` 둘 다 정상화**됨.
+   - ⚠️ 세션 실행 중 권한을 바꾸면 그 세션의 캐시 토큰 갱신까지 지연 있을 수 있음 → 잠깐 뒤 재시도하거나 새 세션 시작.
+3. **완전히 다른 GitHub 계정으로 repo를 옮기는 경우**: 새 소유자 계정에도 Claude GitHub App 설치 + 위 권한 필요.
+   base 브랜치명(`claude/ai-quant-lab-prd-xf6a6h`)은 유지 권장(문서가 참조). 바꾸면 이 문서의 base 참조도 함께 갱신할 것.
 
-**세션이 끊겼다 복귀하면:** 이 문서 위→아래로 읽고, "요청 백로그"에서 미완([ ]) 항목부터.
+### 3) 재개 절차 (Claude가 그대로 수행)
+1. `docs/PROGRESS.md` 통독 → 이 가이드 + 아래 "다음 할 일".
+2. 로컬 최신화: `git fetch origin claude/ai-quant-lab-prd-xf6a6h && git checkout -B claude/progress-md-review-lx80cy origin/claude/ai-quant-lab-prd-xf6a6h`.
+3. 개발 → `python -m pytest`로 그린 확인(전부 network-free, 약 2–3분).
+4. 커밋·푸시: **`git push -u origin <브랜치>` 우선**(unsuspend면 됨). 실패 시 MCP `push_files` 폴백.
+5. `create_pull_request(base=claude/ai-quant-lab-prd-xf6a6h, head=<브랜치>)` → 사용자 병합.
+6. **끝낼 때마다 이 문서 갱신**(연대기 + 테스트 카운트 + 다음 할 일)해서 같은 PR에 포함.
+
+## 다음 할 일 (재개 시 우선순위 · 파일 포인터 포함)
+1. **결과 내보내기(CSV/JSON)** — 가장 작고 자립형(network-free)이라 재개 첫 슬라이스로 추천.
+   - 스크린 매칭 CSV는 이미 있음(`web/app.py`의 `screen_matches_csv`, `GET /screen/{id}/matches.csv`).
+   - 추가할 것: 스크린 결과 **JSON** 내보내기 + **종이 포트폴리오 내보내기**(`GET /paper/{id}/export.csv|.json`).
+     직렬화는 `web/paper.py`의 `PaperPortfolio.to_dict()` 재사용. 라우트는 `web/app.py`.
+2. **페이퍼 트레이딩 후속** (연대기 #14 확장):
+   - (a) **전략(백테스트) 결과에서도 담기** — 지금은 스크린 출처만. 백테스트의 **마지막 목표비중 스냅샷**이 없어서
+     막혀 있음 → `quantlab/run.py`/`web/service.py`에서 마지막 리밸런스 weights를 `runs/<id>/weights.json`으로
+     저장하는 작은 확장 후, `web/paper.py`에 `open_from_run()` 추가 + `run_detail_page`에 "담기" 버튼.
+   - (b) **평가 이력 시계열 차트** — 매 `mark_paper` 결과를 `paper/<id>/marks.jsonl`로 append하고
+     상세 페이지에 self-contained SVG 스파크라인(외부 asset 0 원칙 유지).
+   - (c) **리밸런스 자동 반영** — 현재는 buy-and-hold. 목표비중 주기적 리밸런싱 옵션.
+3. **스크린/KRX 데이터 핀** — 스크린도 유니버스 패널을 parquet로 스냅샷·핀하면 오프라인 재현 가능
+   (재현성 번들 확장). `web/repro.py`의 `pin_file`/`reproduce_run` 패턴을 스크린 패널에 적용.
+4. **리서치 파이프라인** — 리밸런스일별 완전 point-in-time 유니버스(현재 v1은 start 시점 1회 구성).
+   코어 `quantlab/data/universe.py` + `factors/portfolio.py` 확장.
+5. **스크리너 실데이터(로컬)** — `.[data]` + KRX 네트워크로 실제 한국 종목명 스크리닝(로컬 전용, 네트워크 필요).
+
+> **참고:** 위 요청 백로그(1~9)와 스크리너·KRX 관련 사용자 요청은 **전부 처리·병합 완료**(아래 "요청 백로그" 참고).
+> 미해결 사용자 버그는 없음. 재개는 "다음 할 일"에서 고르면 된다.
 
 ## 개발 환경 & 워크플로 메모 (중요)
 - **자동 커밋·PR 워크플로 (2026-08-06 가동 — patch 수기 전달 폐지)**: 이제 Claude가 GitHub MCP로 직접 커밋·PR 한다.
@@ -43,21 +74,28 @@ M0–M4(백테스트 코어 + 리포트)는 완료. 지금은 **M5 제품화 = �
   - **자동 흐름**: ① 로컬에서 코드/테스트 작성·`pytest` 검증 → ② (브랜치 없으면) `create_branch`(from_branch=base) →
     ③ `push_files`(owner=`AHRA-June`, repo=`AI_quant_lab`, branch=기능브랜치, files=변경파일 전체내용, message=커밋메시지)로
     원격 커밋 → ④ `create_pull_request`(base=`claude/ai-quant-lab-prd-xf6a6h`, head=기능브랜치)로 PR 자동 생성.
-  - **주의**: `push_files`는 diff가 아니라 **파일 전체 내용**을 통째로 올림 → 올리기 전 로컬 파일을 최종본으로 만들고
-    그 내용을 넣는다. `git push` CLI는 이 세션에서 자격증명 미주입이라 항상 403 → **CLI push 쓰지 말고 MCP 사용**.
-  - 원격에 직접 커밋하므로 필요 시 `git fetch origin <branch>` + `git reset --hard origin/<branch>`로 로컬을 원격에 맞춘다.
+  - **커밋 방법 두 가지 (unsuspend 상태 기준 둘 다 동작)**:
+    (a) **`git push -u origin <branch>` — 권장, 가장 간단**. 앱 정지 땐 403이었으나 **Unsuspend 후 정상 동작 확인됨**(PR #18은 이걸로 푸시).
+    (b) MCP `push_files` — 폴백. diff가 아니라 **파일 전체 내용**을 통째로 올리므로 올리기 전 로컬 파일을 최종본으로 만들고 그 내용을 넣는다.
+  - `push_files`로 원격에 직접 커밋했다면 로컬은 `git fetch origin <branch>` + `git reset --hard origin/<branch>`로 맞춘다(로컬 `git push`면 불필요).
 - 기본 브랜치(=PR base): `claude/ai-quant-lab-prd-xf6a6h` (이 repo엔 `main` 없음, PRD 브랜치가 base 역할).
   현재 기능 브랜치: `claude/progress-md-review-lx80cy`.
-- 사용자 환경: **Windows + Python 3.14** (PATH 미등록 → `set PY=%LOCALAPPDATA%\Programs\Python\Python314\python.exe`
-  후 `"%PY%" -m ...` 로 실행). pykrx는 설치돼 있으나 KRX 네트워크는 로컬에서만.
+- 사용자 환경: **Windows + Python 3.14**. 두 가지 실행 방식:
+  - **venv 사용(사용자가 실제로 쓰는 방식)**: `.venv` 활성화 상태(`(.venv)` 프롬프트)면 그냥 **`python`** 사용.
+    ⚠️ 이때 `%PY%`는 필요 없음(그건 PATH에 파이썬이 없을 때만). 사용자가 `'"%PY%"'은 명령이 아닙니다` 에러를
+    낸 적 있음 → **venv 안에서는 `python -m ...`** 로 안내할 것.
+  - **PATH 미등록 + venv 없을 때**: `set PY=%LOCALAPPDATA%\Programs\Python\Python314\python.exe` 후 `"%PY%" -m ...`.
+  - pykrx는 설치돼 있으나 KRX 네트워크는 로컬에서만 됨.
 
 ## 로컬 실행법
 ```cmd
-"%PY%" -m pip install -e ".[web]"
-"%PY%" -m uvicorn quantlab.web.app:create_app --factory --port 8000
+:: venv 활성화 상태면 그냥 python
+python -m pip install -e ".[web,data]"
+python -m uvicorn quantlab.web.app:create_app --factory --port 8000
 ```
 → http://127.0.0.1:8000 . 자연어/해설은 `ANTHROPIC_API_KEY` + `.[llm]` 필요(유료 API).
 KRX 실데이터는 `.[data]` + KRX 네트워크. **둘 다 없어도** 합성/CSV/직접-조건식으로 다 돌아감.
+화면 사용 순서(페이퍼 트레이딩): 종목 찾기 → 조건 실행 → 결과에서 "종이 포트폴리오로 담기" → 종이 포트폴리오 탭 → "다시 평가".
 
 ## 무엇을 만들었나 (연대기)
 ### 코어 (M5 이전, 이미 병합됨)
